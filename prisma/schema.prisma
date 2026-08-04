@@ -21,3 +21,37 @@ model Todo {
   // En yeni todo'ları hızlı sıralayabilmek için index.
   @@index([createdAt])
 }
+
+// ---------------------------------------------------------------------------
+// Task Assignment feature (served over GraphQL, not tRPC).
+//
+// These two models are completely independent of Todo above. They exist so the
+// project can demonstrate the same stack solved twice: Todo via tRPC, Task
+// Assignment via GraphQL. They share one Prisma client and one SQLite file.
+// ---------------------------------------------------------------------------
+
+model User {
+  id   String @id @default(cuid())
+  name String
+  age  Int
+
+  // The "virtual" side of the one-to-one relation: it holds no column in the
+  // database. Prisma derives it by looking for the Task row whose userId
+  // points here. Optional (`?`) because a user may have no task yet.
+  task Task?
+}
+
+model Task {
+  id          String @id @default(cuid())
+  name        String
+  description String
+  type        String
+
+  // The "owning" side: this model physically stores the foreign key column.
+  user   User?   @relation(fields: [userId], references: [id])
+  userId String? @unique
+  // ^ @unique is what turns this into ONE-TO-ONE rather than one-to-many.
+  //   Without it, many tasks could share a userId. With it, the database
+  //   itself rejects a second task pointing at the same user — so the
+  //   invariant survives even if application code has a bug.
+}
