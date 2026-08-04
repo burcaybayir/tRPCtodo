@@ -1,0 +1,23 @@
+// Prisma şeması: veritabanı tablolarının tek kaynağı (source of truth).
+// `prisma db push` bu dosyayı okuyup SQLite dosyasında tabloyu oluşturur,
+// `prisma generate` ise bu modelden TypeScript tiplerini üretir.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Todo {
+  id          String   @id @default(cuid())
+  title       String
+  description String?  // `?` = opsiyonel → TS tarafında `string | null`
+  completed   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  // En yeni todo'ları hızlı sıralayabilmek için index.
+  @@index([createdAt])
+}
