@@ -1,14 +1,14 @@
 /**
- * KÖK ROUTER (root / app router)
+ * ROOT ROUTER (app router)
  *
- * Tüm alt router'ları tek bir ağaçta birleştirir. Buraya eklediğin her isim
- * istemcide bir "namespace" olur:
+ * Merges every sub-router into a single tree. Each key you add here becomes a
+ * namespace on the client:
  *
  *   todoRouter.create  →  trpc.todo.create.useMutation()
  *   todoRouter.list    →  trpc.todo.list.useQuery()
  *
- * İleride `user: userRouter` eklersen istemcide `trpc.user.*` belirir —
- * hiçbir kod üretimi (codegen) yok, sadece TypeScript tip çıkarımı.
+ * Add `user: userRouter` later and `trpc.user.*` appears on the client — no
+ * code generation involved, just TypeScript inference.
  */
 
 import { createTRPCRouter } from "~/server/trpc/trpc";
@@ -19,9 +19,9 @@ export const appRouter = createTRPCRouter({
 });
 
 /**
- * tRPC'nin SİHRİ BURADA: sunucu router'ının TİPİNİ dışa açıyoruz.
- * İstemci sadece bu tipi import eder (`import type`), çalışma zamanında
- * sunucu kodundan hiçbir şey bundle'a girmez. Uçtan uca tip güvenliği
- * bu tek satır sayesinde çalışır.
+ * THIS IS WHERE tRPC'S MAGIC LIVES: we export the TYPE of the server router.
+ * The client imports only this type (`import type`), so at runtime none of the
+ * server code ends up in the browser bundle. End-to-end type safety rests on
+ * this single line.
  */
 export type AppRouter = typeof appRouter;

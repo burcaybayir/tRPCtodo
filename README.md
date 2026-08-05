@@ -1,174 +1,180 @@
-# tRPC + GraphQL — öğrenme projesi
+# tRPC + GraphQL — a learning project
 
-Tek bir Next.js uygulaması, tek bir veritabanı, yan yana duran **iki bağımsız API katmanı**:
+One Next.js app, one database, **two independent API layers** running side by side:
 
-| Sekme | API | Endpoint | İstemci | Cache |
+| Tab | API | Endpoint | Client | Cache |
 |---|---|---|---|---|
 | **Todos** | tRPC | `/api/trpc` | `@trpc/react-query` | React Query |
 | **Task Assignment** | GraphQL | `/api/graphql` | Apollo Client | Apollo `InMemoryCache` |
 
-İkisi de aynı Prisma client üzerinden aynı SQLite dosyasına yazar. Veritabanının
-üstündeki her şey ayrıdır — Todos sekmesi Apollo'yu, Task Assignment sekmesi tRPC'yi
-hiç görmez. Amaç aynı problemi iki protokolde çözerken farkları yan yana görmek.
+Both write to the same SQLite file through the same Prisma client. Everything
+above the database is separate — the Todos tab never touches Apollo, and the
+Task Assignment tab never touches tRPC. The point is to solve comparable
+problems in two protocols and see the differences next to each other.
 
-## Kurulum
+## Setup
 
 ```bash
 npm install
 ```
 
-`postinstall` script'i `prisma generate`'i otomatik çalıştırır (Prisma tiplerini üretir).
+The `postinstall` script runs `prisma generate` automatically (it produces the
+Prisma types).
 
 ```bash
 npx prisma migrate deploy
 ```
 
-`prisma/migrations/` altındaki iki migration'ı sırayla uygular:
-`0_init` (Todo tablosu) ve `..._add_user_and_task` (User + Task tabloları).
-Ayrı bir veritabanı sunucusu kurmana gerek yok — SQLite tek bir dosyadır.
+Applies the two migrations under `prisma/migrations/` in order: `0_init` (the
+Todo table) and `..._add_user_and_task` (the User and Task tables). No separate
+database server to install — SQLite is a single file.
 
-> Şemayı kendin değiştirirsen yeni migration üret: `npx prisma migrate dev --name <ad>`.
-> `prisma db push` de çalışır ama migration geçmişi tutmaz.
+> If you change the schema yourself, create a new migration with
+> `npx prisma migrate dev --name <name>`. `prisma db push` also works, but it
+> keeps no migration history.
 
 ```bash
 npm run codegen
 ```
 
-GraphQL şemasından TypeScript tiplerini üretir (`src/lib/apollo/generated/graphql.ts`).
-Üretilen dosya repoda commit'li olduğu için bu adım ilk kurulumda **zorunlu değil** —
-ama şemayı veya bir operation'ı her değiştirdiğinde tekrar çalıştırman gerekir.
+Generates TypeScript types from the GraphQL schema into
+`src/lib/apollo/generated/graphql.ts`. The generated file is committed, so this
+step is **not required** on a fresh clone — but you must re-run it every time
+you change the schema or an operation.
 
 ```bash
 npm run dev
 ```
 
-- Uygulama: http://localhost:3000
+- App: http://localhost:3000
 - GraphQL explorer (Apollo Sandbox): http://localhost:3000/api/graphql
-- Veritabanı arayüzü: `npm run db:studio`
+- Database browser: `npm run db:studio`
 
-## İstek nasıl akıyor?
+## How a request flows
 
 ```
-Tarayıcı
+Browser
   trpc.todo.list.useQuery({ completed: true })
-        │  (React Query cache'e bakar, yoksa istek atar)
+        │  (checks the React Query cache, requests if it misses)
         ▼
   httpBatchLink  →  POST/GET /api/trpc/todo.list
         │
         ▼  src/app/api/trpc/[trpc]/route.ts
   fetchRequestHandler
         │
-        ├─ createTRPCContext()      src/server/trpc/context.ts   → { db, headers }
-        ├─ Zod input doğrulaması    src/server/trpc/schemas/     → geçersizse BAD_REQUEST
+        ├─ createTRPCContext()   src/server/trpc/context.ts  → { db, headers }
+        ├─ Zod input validation  src/server/trpc/schemas/    → BAD_REQUEST if invalid
         ▼
-  resolver                          src/server/trpc/routers/todo.ts
+  resolver                       src/server/trpc/routers/todo.ts
         │
         ▼
   Prisma → SQLite
         │
-        ▼  superjson ile serialize
-  Tarayıcı: data (Date'ler gerçek Date olarak gelir)
+        ▼  serialized with superjson
+  Browser: data (Dates arrive as real Date objects)
 ```
 
-GraphQL tarafı, aynı akışın karşılığı:
+The GraphQL side, the same flow in its own terms:
 
 ```
-Tarayıcı
-  useQuery(GET_USERS)          ← gönderilen şey bir DOKÜMAN, bir prosedür adı değil
-        │  (Apollo InMemoryCache'e bakar, yoksa istek atar)
+Browser
+  useQuery(GET_USERS)        ← what you send is a DOCUMENT, not a procedure name
+        │  (checks the Apollo InMemoryCache, requests if it misses)
         ▼
-  HttpLink  →  POST /api/graphql        ← tek URL, her operation için aynı
+  HttpLink  →  POST /api/graphql          ← one URL, the same for every operation
         │
         ▼  src/app/api/graphql/route.ts
   ApolloServer (startServerAndCreateNextHandler)
         │
-        ├─ createGraphQLContext()    src/server/graphql/context.ts  → { db }
-        ├─ SDL doğrulaması           src/server/graphql/typeDefs.ts → geçersizse istek hiç çalışmaz
+        ├─ createGraphQLContext()  src/server/graphql/context.ts  → { db }
+        ├─ SDL validation          src/server/graphql/typeDefs.ts → invalid queries never run
         ▼
-  resolver ağacı                     src/server/graphql/resolvers.ts
+  resolver tree                    src/server/graphql/resolvers.ts
     Query.users        → SELECT * FROM User
-      └─ User.task     → her kullanıcı için bir kez ÇAĞRILIR (field resolver)
+      └─ User.task     → INVOKED once per user (field resolver)
         │
         ▼
   Prisma → SQLite
         │
-        ▼  düz JSON (Date yok — bu yüzden Task modelinde tarih alanı da yok)
-  Tarayıcı: istenen alanlar, istenen şekilde
+        ▼  plain JSON (no Date type — which is why Task has no date field)
+  Browser: exactly the fields that were asked for
 ```
 
-## İki API yan yana
+## The two APIs side by side
 
 | | tRPC (Todos) | GraphQL (Task Assignment) |
 |---|---|---|
-| Sözleşme nerede | Yok — `typeof appRouter` | `typeDefs.ts` içindeki SDL |
-| Tipler nereden | Otomatik çıkarım, sıfır adım | `npm run codegen` ile üretim |
-| İstemci ne seçer | Hiçbir şey — sunucu şekli belirler | Hangi alanların döneceğini istemci belirler |
-| Kimler tüketebilir | Sadece TypeScript | Her dil, her istemci |
-| Keşfedilebilirlik | Yok (runtime'da kendini tarif etmez) | Introspection + `/api/graphql` explorer |
-| Cache birimi | Query key (`todo.list` + input) | Normalize nesne (`User:abc123`) |
-| Tazeleme | `utils.todo.list.invalidate()` | `refetchQueries: [{ query: GET_USERS }]` |
-| Hata kanalı | HTTP durum kodu + `TRPCError` | HTTP 200 + gövdede `errors` dizisi |
+| Where the contract lives | Nowhere — `typeof appRouter` | The SDL in `typeDefs.ts` |
+| Where types come from | Inferred, zero steps | Generated via `npm run codegen` |
+| What the client chooses | Nothing — the server fixes the shape | Which fields come back |
+| Who can consume it | TypeScript only | Any language, any client |
+| Discoverability | None (no runtime self-description) | Introspection + the `/api/graphql` explorer |
+| Unit of caching | Query key (`todo.list` + input) | Normalized object (`User:abc123`) |
+| Refreshing | `utils.todo.list.invalidate()` | `refetchQueries: [{ query: GET_USERS }]` |
+| Error channel | HTTP status code + `TRPCError` | HTTP 200 + an `errors` array in the body |
 
-## Dosya haritası
+## File map
 
-| Dosya | Ne işe yarar |
+| File | What it does |
 |---|---|
-| `src/server/db.ts` | Prisma Client singleton'ı (dev'de bağlantı sızıntısını önler) |
-| `src/server/trpc/context.ts` | Her istekte oluşan context — procedure'lere `db` vb. taşır |
-| `src/server/trpc/trpc.ts` | `initTRPC` kurulumu; `createTRPCRouter` + `publicProcedure` üretir |
-| `src/server/trpc/schemas/todo.ts` | Zod şemaları + `z.infer` ile tip çıkarımı |
-| `src/server/trpc/routers/todo.ts` | `create` / `list` / `toggle` / `delete` procedure'leri |
-| `src/server/trpc/root.ts` | Kök router + `AppRouter` tipi (istemcinin tek bildiği şey) |
-| `src/app/api/trpc/[trpc]/route.ts` | Tek HTTP uç noktası |
-| `src/lib/trpc/client.ts` | `createTRPCReact<AppRouter>()` → React hook'ları |
-| `src/lib/trpc/Provider.tsx` | QueryClient + tRPC client provider'ları |
+| `src/server/db.ts` | Prisma Client singleton (prevents connection leaks in dev) |
+| `src/server/trpc/context.ts` | Per-request context — carries `db` and friends to procedures |
+| `src/server/trpc/trpc.ts` | `initTRPC` setup; produces `createTRPCRouter` + `publicProcedure` |
+| `src/server/trpc/schemas/todo.ts` | Zod schemas + type inference with `z.infer` |
+| `src/server/trpc/routers/todo.ts` | The `create` / `list` / `toggle` / `delete` procedures |
+| `src/server/trpc/root.ts` | Root router + the `AppRouter` type (all the client knows) |
+| `src/app/api/trpc/[trpc]/route.ts` | The single HTTP endpoint |
+| `src/lib/trpc/client.ts` | `createTRPCReact<AppRouter>()` → React hooks |
+| `src/lib/trpc/Provider.tsx` | QueryClient + tRPC client providers |
 | `src/app/_components/` | TodoForm, TodoList, TodoFilter |
 
-### GraphQL tarafı
+### GraphQL side
 
-| Dosya | Ne işe yarar |
+| File | What it does |
 |---|---|
-| `src/server/graphql/typeDefs.ts` | **SDL şeması** — type/Query/Mutation tanımları, docstring'lerle |
-| `src/server/graphql/context.ts` | Her istekte oluşan `{ db }` — tRPC context'inin karşılığı |
-| `src/server/graphql/resolvers.ts` | Query/Mutation resolver'ları + `User.task` ve `Task.user` field resolver'ları + N+1 notları |
-| `src/app/api/graphql/route.ts` | Apollo Server'ı Next.js route handler'ına bağlar |
+| `src/server/graphql/typeDefs.ts` | **The SDL schema** — type/Query/Mutation definitions with docstrings |
+| `src/server/graphql/context.ts` | Per-request `{ db }` — the counterpart of the tRPC context |
+| `src/server/graphql/resolvers.ts` | Query/Mutation resolvers + the `User.task` and `Task.user` field resolvers + N+1 notes |
+| `src/app/api/graphql/route.ts` | Wires Apollo Server into a Next.js route handler |
 | `src/lib/apollo/client.ts` | `ApolloClient` + `InMemoryCache` |
-| `src/lib/apollo/Provider.tsx` | `ApolloProvider` (layout'ta tRPC provider'ının içinde) |
-| `src/lib/apollo/operations.ts` | Tüm query/mutation dokümanları |
-| `src/lib/apollo/generated/graphql.ts` | **Üretilen dosya** — elle düzenleme, `npm run codegen` çalıştır |
-| `codegen.ts` | Codegen yapılandırması |
+| `src/lib/apollo/Provider.tsx` | `ApolloProvider` (nested inside the tRPC provider in the layout) |
+| `src/lib/apollo/operations.ts` | Every query and mutation document |
+| `src/lib/apollo/generated/graphql.ts` | **Generated file** — do not edit by hand, run `npm run codegen` |
+| `codegen.ts` | Codegen configuration |
 | `src/app/_components/task/` | CreateUserForm, CreateTaskForm, AssignTaskForm, EntityLists, AssignmentsTable |
 
-## Denemeye değer
+## Worth trying
 
-1. `src/server/trpc/routers/todo.ts` içindeki `create`'e yeni bir alan ekle
-   (ör. `priority`) — istemci kodu **derlenmeyecek**. tRPC'nin uçtan uca tip
-   güvenliği tam olarak bu.
-2. `TodoForm.tsx` içindeki `utils.todo.list.invalidate()` satırını yorum satırı
-   yap — todo eklendiğinde listenin güncellenmediğini gör. Cache invalidation'ın
-   ne işe yaradığı böyle netleşir.
-3. Boş başlıkla form gönder → istemci tarafı Zod hatası (network isteği yok).
-4. `staleTime`'ı `Provider.tsx`'te 0 yap, sekme değiştirince refetch'leri izle.
+1. Add a new field to `create` in `src/server/trpc/routers/todo.ts` (say
+   `priority`) — the client code **stops compiling**. That is exactly what
+   tRPC's end-to-end type safety buys you.
+2. Comment out `utils.todo.list.invalidate()` in `TodoForm.tsx`, then add a
+   todo: the list does not update. Nothing makes the value of cache
+   invalidation clearer.
+3. Submit the form with an empty title → a client-side Zod error, with no
+   network request at all.
+4. Set `staleTime` to 0 in `Provider.tsx` and watch the refetches as you switch
+   tabs.
 
-### GraphQL tarafı
+### GraphQL side
 
-5. `operations.ts` içindeki `GET_USERS`'tan `task { ... }` bloğunu sil — sunucu
-   `User.task` resolver'ını **hiç çalıştırmaz**. İstemcinin sorgu planını
-   değiştirebilmesi GraphQL'in tRPC'de karşılığı olmayan özelliği.
-6. `AssignTaskForm.tsx` içindeki `refetchQueries` satırını yorum yap, sonra bir
-   görev ata: tablo anında güncellenir (normalize cache `Task:<id>`'yi yamalar)
-   ama kullanıcı listesi "no task assigned" demeye devam eder. İlişkinin iki
-   ucunun neden aynı şey olmadığı burada görünür.
-7. `resolvers.ts`'te `User: { task: ... }`'ı `User: { tasks: ... }` yap —
-   sunucu **açılışta** patlar, o alana dokunan ilk istekte değil:
-   `User.tasks defined in resolvers, but not in schema`. Şema ile resolver'ın
-   birbirini tutup tutmadığı `new ApolloServer(...)` anında doğrulanır.
-   (Dikkat: bu kontrol alanların *varlığını* denetler, döndürülen değerin
-   tipini değil — `Int!` alanına string döndürmek çalışma zamanı hatasıdır.)
-8. `resolvers.ts` içindeki `User.task` resolver'ında `findUnique`'i `findFirst`
-   yap ve Prisma sorgu log'unu izle: tek `IN (?,?,?)` sorgusu, kullanıcı başına
-   bir sorguya dönüşür. N+1'in ne olduğu ve Prisma'nın onu neden çoğu zaman
-   sessizce yuttuğu tam olarak bu (ayrıntı: `resolvers.ts` sonundaki not).
-9. Aynı görevi iki kez atamayı dene → `TASK_ALREADY_ASSIGNED`. Ağ sekmesine bak:
-   HTTP **200**, gövdede `errors`. GraphQL'de "istek başarılı" ile "işlem
-   başarılı" farklı sorulardır.
+5. Delete the `task { ... }` block from `GET_USERS` in `operations.ts` — the
+   server stops running the `User.task` resolver **entirely**. A client that
+   can change the server's query plan is something tRPC has no answer for.
+6. Comment out `refetchQueries` in `AssignTaskForm.tsx`, then assign a task:
+   the table updates instantly (the normalized cache patches `Task:<id>`) while
+   the users list keeps saying "no task assigned". That is where you see why
+   the two ends of a relation are not the same object.
+7. Rename `User: { task: ... }` to `User: { tasks: ... }` in `resolvers.ts` —
+   the server fails at **startup**, not on the first request that touches the
+   field: `User.tasks defined in resolvers, but not in schema`. Schema and
+   resolvers are cross-checked the moment `new ApolloServer(...)` runs.
+   (Note: this check validates that fields *exist*, not the types of the values
+   returned — returning a string for an `Int!` field is a runtime error.)
+8. Change `findUnique` to `findFirst` in the `User.task` resolver and watch the
+   Prisma query log: one `IN (?,?,?)` query turns into one query per user. That
+   is what N+1 is, and why Prisma usually swallows it silently here (details in
+   the note at the bottom of `resolvers.ts`).
+9. Try assigning the same task twice → `TASK_ALREADY_ASSIGNED`. Check the
+   network tab: HTTP **200**, with `errors` in the body. In GraphQL, "did the
+   request succeed" and "did the operation succeed" are different questions.

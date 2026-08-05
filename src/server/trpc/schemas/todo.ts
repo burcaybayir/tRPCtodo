@@ -1,38 +1,40 @@
 /**
- * ZOD ŞEMALARI
+ * ZOD SCHEMAS
  *
- * Neden ayrı dosya? Aynı şemayı hem sunucuda (procedure input doğrulaması)
- * hem de istemcide (form doğrulaması) kullanabilelim diye. Tek kaynak =
- * kurallar iki yerde ayrışmaz.
+ * Why a separate file? So the same schema can run on the server (procedure
+ * input validation) and on the client (form validation). One source means the
+ * rules cannot drift apart in two places.
  *
- * Buradaki asıl fikir: ŞEMA TEK GERÇEK KAYNAKTIR, tipleri elle yazmayız —
- * `z.infer` ile şemadan çıkarırız.
+ * The core idea: THE SCHEMA IS THE SINGLE SOURCE OF TRUTH. We never hand-write
+ * the types — we derive them from the schema with `z.infer`.
  */
 
 import { z } from "zod";
 
-/** `create` mutation'ının input'u */
+/** Input for the `create` mutation. */
 export const createTodoSchema = z.object({
   title: z
     .string()
     .trim()
-    .min(1, "Başlık zorunludur")
-    .max(120, "Başlık en fazla 120 karakter olabilir"),
+    .min(1, "Title is required")
+    .max(120, "Title must be at most 120 characters"),
   description: z
     .string()
     .trim()
-    .max(500, "Açıklama en fazla 500 karakter olabilir")
+    .max(500, "Description must be at most 500 characters")
     .optional()
-    // Boş string gelirse `undefined`'a çevir: DB'de "" yerine NULL dursun.
+    // Turn an empty string into `undefined` so the database stores NULL
+    // rather than "".
     .transform((v) => (v === "" ? undefined : v)),
 });
 
 /**
- * `list` query'sinin input'u.
+ * Input for the `list` query.
  *
- * `.optional()` iki katmanda birden iş yapıyor:
- *  1. `completed` verilmezse → filtre yok, hepsi döner
- *  2. Tüm nesne verilmezse (`.optional()` en dışta) → `list()` argümansız çağrılabilir
+ * `.optional()` is doing work at two levels here:
+ *  1. omit `completed` → no filter, everything is returned
+ *  2. omit the whole object (the outer `.optional()`) → `list()` can be called
+ *     with no arguments at all
  */
 export const listTodosSchema = z
   .object({
@@ -40,23 +42,23 @@ export const listTodosSchema = z
   })
   .optional();
 
-/** `toggle` ve `delete` mutation'larının input'u */
+/** Input for the `toggle` and `delete` mutations. */
 export const todoIdSchema = z.object({
-  id: z.string().cuid("Geçersiz todo id"),
+  id: z.string().cuid("Invalid todo id"),
 });
 
 /**
- * TİP ÇIKARIMI (`z.infer`)
+ * TYPE INFERENCE (`z.infer`)
  *
- * Şemayı yazdık, tipi bedavaya alıyoruz. Şemayı değiştirdiğinde tip de
- * otomatik değişir — ikisinin birbirinden kopma ihtimali yok.
+ * We wrote the schema; the types come free. Change the schema and the types
+ * change with it — there is no way for the two to fall out of sync.
  *
- * CreateTodoInput şuna eşit:
+ * CreateTodoInput is equivalent to:
  *   { title: string; description?: string | undefined }
  *
- * Küçük bir ayrıntı: `.transform()` kullandığımız için giriş ve çıkış tipleri
- * farklılaşabilir. `z.infer` = ÇIKIŞ tipi (parse sonrası),
- * `z.input` = GİRİŞ tipi (parse öncesi, formdan gelen ham hali).
+ * One subtlety: because we use `.transform()`, the input and output types can
+ * differ. `z.infer` is the OUTPUT type (after parsing), while `z.input` is the
+ * INPUT type (before parsing — the raw shape coming off the form).
  */
 export type CreateTodoInput = z.infer<typeof createTodoSchema>;
 export type CreateTodoRawInput = z.input<typeof createTodoSchema>;

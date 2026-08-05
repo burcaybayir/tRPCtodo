@@ -1,9 +1,9 @@
 /**
- * KÖK LAYOUT
+ * ROOT LAYOUT
  *
- * Bu bir Server Component. tRPC hook'ları istemcide çalıştığı için
- * provider'ları burada, ağacın en tepesinde saran bir Client Component
- * (TRPCProvider) ile devreye alıyoruz.
+ * This is a Server Component. Since tRPC and Apollo hooks run on the client,
+ * the providers are pulled in here, at the top of the tree, through Client
+ * Components (TRPCProvider and ApolloProvider).
  */
 
 import type { Metadata } from "next";
@@ -12,8 +12,9 @@ import { ApolloProvider } from "~/lib/apollo/Provider";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "tRPC Todo",
-  description: "tRPC öğrenmek için basit bir todo uygulaması",
+  title: "tRPC + GraphQL playground",
+  description:
+    "A learning project running a tRPC API and a GraphQL API side by side",
 };
 
 export default function RootLayout({
@@ -22,7 +23,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="tr">
+    <html lang="en">
       <body className="min-h-screen bg-slate-50 text-slate-900 antialiased">
         {/*
           Two independent providers, nested only because React needs a tree.

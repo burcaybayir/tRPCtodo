@@ -1,10 +1,10 @@
 /**
- * Prisma Client singleton'ı.
+ * Prisma Client singleton.
  *
- * Neden singleton? Next.js dev modunda her dosya değişikliğinde modüller
- * yeniden yüklenir. Her seferinde `new PrismaClient()` çağırsaydık onlarca
- * veritabanı bağlantısı açılır ve "too many connections" uyarısı alırdık.
- * Bu yüzden instance'ı `globalThis` üzerinde saklayıp tekrar kullanıyoruz.
+ * Why a singleton? In Next.js dev mode, modules are reloaded on every file
+ * change. Calling `new PrismaClient()` each time would open dozens of database
+ * connections and trigger "too many connections" warnings. So we stash the
+ * instance on `globalThis` and reuse it.
  */
 
 import { PrismaClient } from "@prisma/client";
@@ -16,7 +16,7 @@ const globalForPrisma = globalThis as unknown as {
 export const db =
   globalForPrisma.prisma ??
   new PrismaClient({
-    // Dev'de çalışan SQL sorgularını konsolda görmek öğrenirken faydalı.
+    // Seeing the SQL that actually runs is useful while learning.
     log: process.env.NODE_ENV === "development" ? ["query", "error", "warn"] : ["error"],
   });
 

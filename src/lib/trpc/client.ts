@@ -1,15 +1,15 @@
 /**
- * tRPC İSTEMCİSİ (React hook'ları)
+ * tRPC CLIENT (React hooks)
  *
- * `createTRPCReact<AppRouter>()` sunucu router'ının tipinden, React Query
- * tabanlı hook'lardan oluşan bir nesne üretir:
+ * `createTRPCReact<AppRouter>()` turns the server router's type into an object
+ * of React Query-backed hooks:
  *
  *   trpc.todo.list.useQuery()
  *   trpc.todo.create.useMutation()
- *   trpc.useUtils()   → cache'e müdahale etmek için (invalidate, setData...)
+ *   trpc.useUtils()   → for reaching into the cache (invalidate, setData, ...)
  *
- * DİKKAT: `import type` kullanıyoruz. Sadece TİP import ediliyor, sunucu kodu
- * (Prisma, veritabanı bağlantısı vb.) tarayıcı bundle'ına GİRMİYOR.
+ * NOTE the `import type`. Only the TYPE is imported, so server code (Prisma,
+ * the database connection, and so on) never reaches the browser bundle.
  */
 
 import { createTRPCReact } from "@trpc/react-query";

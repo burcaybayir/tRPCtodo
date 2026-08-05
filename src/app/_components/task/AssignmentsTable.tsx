@@ -57,11 +57,14 @@ export function AssignmentsTable() {
       <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
         <table className="w-full text-left text-sm">
           {/*
-            No `uppercase` utility here on purpose. The document is <html
-            lang="tr">, and CSS text-transform follows the document language:
-            Turkish casing maps "i" to "İ", so "Assigned to" would render as
-            "ASSİGNED TO". Writing the label in the case you want avoids the
-            whole class of locale-dependent text-transform bugs.
+            No `uppercase` utility here on purpose.
+
+            CSS text-transform follows the document language, and this page
+            used to be served as <html lang="tr">. Turkish casing maps "i" to
+            "İ", so `uppercase` rendered this header as "ASSİGNED TO" — a real
+            bug that showed up on screen. The document is `lang="en"` now, but
+            writing labels in the case you actually want avoids the whole class
+            of locale-dependent text-transform surprises.
           */}
           <thead className="border-b border-slate-200 bg-slate-50 text-xs font-medium tracking-wide text-slate-500">
             <tr>

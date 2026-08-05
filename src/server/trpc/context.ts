@@ -1,17 +1,17 @@
 /**
  * tRPC CONTEXT
  *
- * Context, HER istek için bir kez oluşturulan ve tüm procedure'lere
- * (query/mutation) argüman olarak geçilen nesnedir. Procedure'ler dışarıya
- * bağımlılıklarına (veritabanı, oturum bilgisi, request header'ları...)
- * buradan erişir.
+ * The context is an object built once per REQUEST and handed to every
+ * procedure (query or mutation) as an argument. It is how procedures reach
+ * their outside dependencies: the database, session data, request headers.
  *
- * Zihin haritası:
- *   HTTP isteği → createContext() → middleware'ler → procedure resolver'ı
+ * Mental model:
+ *   HTTP request → createContext() → middleware → procedure resolver
  *
- * Gerçek bir uygulamada burada oturumu çözer ve `user`'ı context'e koyardın:
+ * In a real application you would resolve the session here and put `user` on
+ * the context:
  *   const session = await auth(); return { db, user: session?.user ?? null };
- * Bu örnekte auth yok, o yüzden sadece `db` koyuyoruz.
+ * This example has no auth, so it carries only `db`.
  */
 
 import type { FetchCreateContextFnOptions } from "@trpc/server/adapters/fetch";
@@ -20,14 +20,14 @@ import { db } from "~/server/db";
 export function createTRPCContext(opts: FetchCreateContextFnOptions) {
   return {
     db,
-    // Header'lara ihtiyacın olursa diye örnek olarak duruyor
-    // (ör. Authorization token'ı okumak için).
+    // Kept as an example in case you need the headers
+    // (for reading an Authorization token, say).
     headers: opts.req.headers,
   };
 }
 
 /**
- * Context'in tipini fonksiyonun dönüş tipinden ÇIKARIYORUZ.
- * Böylece context'e yeni bir alan eklediğinde tipi elle güncellemen gerekmez.
+ * We DERIVE the context type from the function's return type, so adding a new
+ * field to the context never requires updating a type by hand.
  */
 export type TRPCContext = Awaited<ReturnType<typeof createTRPCContext>>;

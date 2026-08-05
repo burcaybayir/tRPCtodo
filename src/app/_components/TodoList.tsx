@@ -1,15 +1,15 @@
 "use client";
 
 /**
- * TODO LİSTESİ — `useQuery` + toggle/delete mutation'ları
+ * TODO LIST — `useQuery` plus the toggle/delete mutations
  */
 
 import { trpc } from "~/lib/trpc/client";
 import type { FilterValue } from "~/app/_components/TodoFilter";
 
-/** Ekrandaki filtre değerini `list` query'sinin input'una çevirir. */
+/** Maps the on-screen filter value to the `list` query's input. */
 function filterToInput(filter: FilterValue) {
-  if (filter === "all") return undefined; // input yok → hepsi
+  if (filter === "all") return undefined; // no input → everything
   return { completed: filter === "completed" };
 }
 
@@ -17,26 +17,26 @@ export function TodoList({ filter }: { filter: FilterValue }) {
   const utils = trpc.useUtils();
 
   /**
-   * useQuery — VERİ OKUMA
+   * useQuery — READING DATA
    *
-   * İki argüman alır: (input, reactQueryOptions)
+   * It takes two arguments: (input, reactQueryOptions)
    *
-   * Kritik nokta: INPUT, CACHE ANAHTARININ PARÇASIDIR.
-   * `{ completed: true }` ile `undefined` ayrı cache girdileridir. Filtreyi
-   * değiştirdiğinde React Query yeni anahtar için yeni bir istek atar; daha
-   * önce görülen filtreye dönersen cache'ten anında gelir.
+   * The key insight: THE INPUT IS PART OF THE CACHE KEY.
+   * `{ completed: true }` and `undefined` are separate cache entries. Change
+   * the filter and React Query fires a request for the new key; switch back to
+   * a filter you already viewed and the data comes straight from cache.
    *
-   * Dönen nesnenin işimize yarayan alanları:
-   *   data      → başarıyla gelen veri (ilk yüklemede undefined)
-   *   isLoading → cache boş + istek uçuşta (ilk yükleme)
-   *   isFetching→ arka planda tazeleme dahil her istekte true
-   *   error     → hata nesnesi
+   * The fields of the returned object worth knowing:
+   *   data       → the data on success (undefined during the first load)
+   *   isLoading  → cache empty AND a request in flight (first load)
+   *   isFetching → true for every request, including background refreshes
+   *   error      → the error object
    */
   const todosQuery = trpc.todo.list.useQuery(filterToInput(filter));
 
   const toggleTodo = trpc.todo.toggle.useMutation({
-    // Durum değişince "Tamamlanan"/"Tamamlanmayan" listelerinin ikisi de
-    // etkilenir → tüm list varyantlarını tazeliyoruz.
+    // Flipping the flag affects both the "Completed" and "Active" lists, so we
+    // refresh every list variant.
     onSuccess: () => utils.todo.list.invalidate(),
   });
 
@@ -44,22 +44,22 @@ export function TodoList({ filter }: { filter: FilterValue }) {
     onSuccess: () => utils.todo.list.invalidate(),
   });
 
-  // --- Durum 1: ilk yükleme ---
+  // --- State 1: first load ---
   if (todosQuery.isLoading) {
-    return <p className="py-8 text-center text-slate-500">Yükleniyor...</p>;
+    return <p className="py-8 text-center text-slate-500">Loading...</p>;
   }
 
-  // --- Durum 2: query hatası (ör. sunucu kapalı) ---
+  // --- State 2: query error (server down, for instance) ---
   if (todosQuery.error) {
     return (
       <div className="rounded-lg bg-red-50 p-4 text-sm text-red-700">
-        <p className="font-medium">Todo&apos;lar yüklenemedi</p>
+        <p className="font-medium">Could not load todos</p>
         <p>{todosQuery.error.message}</p>
         <button
           onClick={() => todosQuery.refetch()}
           className="mt-2 underline underline-offset-2"
         >
-          Tekrar dene
+          Try again
         </button>
       </div>
     );
@@ -67,18 +67,18 @@ export function TodoList({ filter }: { filter: FilterValue }) {
 
   const todos = todosQuery.data ?? [];
 
-  // --- Durum 3: boş liste ---
+  // --- State 3: empty list ---
   if (todos.length === 0) {
     return (
       <p className="py-8 text-center text-slate-500">
         {filter === "all"
-          ? "Henüz todo yok. Yukarıdan ekleyebilirsin."
-          : "Bu filtreye uyan todo yok."}
+          ? "No todos yet. Add one above."
+          : "No todos match this filter."}
       </p>
     );
   }
 
-  // --- Durum 4: liste ---
+  // --- State 4: the list ---
   return (
     <ul className="space-y-2">
       {todos.map((todo) => (
@@ -92,7 +92,7 @@ export function TodoList({ filter }: { filter: FilterValue }) {
             onChange={() => toggleTodo.mutate({ id: todo.id })}
             disabled={toggleTodo.isPending}
             className="mt-1 h-4 w-4 shrink-0 cursor-pointer accent-slate-900"
-            aria-label={`${todo.title} tamamlandı olarak işaretle`}
+            aria-label={`Mark ${todo.title} as completed`}
           />
 
           <div className="min-w-0 flex-1">
@@ -111,11 +111,11 @@ export function TodoList({ filter }: { filter: FilterValue }) {
             )}
 
             {/*
-              superjson transformer sayesinde `createdAt` istemcide gerçek bir
-              Date nesnesi — string parse etmek gerekmiyor.
+              Thanks to the superjson transformer, `createdAt` is a real Date
+              object on the client — no string parsing required.
             */}
             <p className="mt-1 text-xs text-slate-400">
-              {todo.createdAt.toLocaleString("tr-TR")}
+              {todo.createdAt.toLocaleString("en-GB")}
             </p>
           </div>
 
@@ -123,9 +123,9 @@ export function TodoList({ filter }: { filter: FilterValue }) {
             onClick={() => deleteTodo.mutate({ id: todo.id })}
             disabled={deleteTodo.isPending}
             className="shrink-0 rounded-lg px-2 py-1 text-sm text-red-600 transition hover:bg-red-50 disabled:opacity-50"
-            aria-label={`${todo.title} sil`}
+            aria-label={`Delete ${todo.title}`}
           >
-            Sil
+            Delete
           </button>
         </li>
       ))}

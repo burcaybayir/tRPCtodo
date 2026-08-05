@@ -1,15 +1,15 @@
 "use client";
 
 /**
- * PROVIDER'LAR
+ * PROVIDERS
  *
- * İki provider'ı iç içe sarıyoruz:
- *   - QueryClientProvider → React Query'nin cache deposu
- *   - trpc.Provider       → tRPC istemcisi (hangi URL'e, nasıl istek atılacak)
+ * Two providers nested together:
+ *   - QueryClientProvider → React Query's cache store
+ *   - trpc.Provider       → the tRPC client (which URL, how requests are sent)
  *
- * `useState(() => ...)` kalıbı önemli: istemcileri render gövdesinde
- * `new QueryClient()` diye oluşturursak her render'da cache sıfırlanır.
- * useState'in lazy initializer'ı sayesinde bileşen ömrü boyunca tek instance olur.
+ * The `useState(() => ...)` pattern matters: creating the clients inline in the
+ * render body with `new QueryClient()` would reset the cache on every render.
+ * useState's lazy initializer keeps a single instance for the component's life.
  */
 
 import { useState } from "react";
@@ -19,9 +19,9 @@ import superjson from "superjson";
 import { trpc } from "~/lib/trpc/client";
 
 function getBaseUrl() {
-  // Tarayıcıda göreli URL yeterli.
+  // A relative URL is enough in the browser.
   if (typeof window !== "undefined") return "";
-  // Sunucuda mutlak URL gerekir.
+  // On the server an absolute URL is required.
   return `http://localhost:${process.env.PORT ?? 3000}`;
 }
 
@@ -31,8 +31,9 @@ export function TRPCProvider({ children }: { children: React.ReactNode }) {
       new QueryClient({
         defaultOptions: {
           queries: {
-            // 5 sn boyunca veriyi "taze" say → sekme değiştirince gereksiz
-            // refetch olmasın. Öğrenirken davranışı görmek için değiştirebilirsin.
+            // Treat data as "fresh" for 5s so switching tabs does not trigger
+            // pointless refetches. Change it to watch the behaviour while
+            // you are learning.
             staleTime: 5 * 1000,
           },
         },
@@ -43,13 +44,14 @@ export function TRPCProvider({ children }: { children: React.ReactNode }) {
     trpc.createClient({
       links: [
         /**
-         * httpBatchLink: aynı anda yapılan birden fazla tRPC çağrısını TEK
-         * HTTP isteğinde birleştirir. Sayfada 3 farklı useQuery varsa
-         * 3 değil 1 network isteği görürsün.
+         * httpBatchLink: merges multiple simultaneous tRPC calls into ONE HTTP
+         * request. With three separate useQuery calls on a page you see one
+         * network request, not three.
          */
         httpBatchLink({
           url: `${getBaseUrl()}/api/trpc`,
-          // Sunucudaki transformer ile AYNI olmalı, yoksa veri çözülemez.
+          // Must MATCH the transformer on the server, or the payload cannot be
+          // decoded.
           transformer: superjson,
         }),
       ],

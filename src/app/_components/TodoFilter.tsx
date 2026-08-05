@@ -1,16 +1,17 @@
 "use client";
 
 /**
- * FİLTRE ÇUBUĞU — saf UI, tRPC ile ilgisi yok.
- * Seçilen değeri yukarıya (page.tsx) bildirir; sorguyu TodoList atar.
+ * FILTER BAR — pure UI, nothing to do with tRPC.
+ * It reports the selected value upward (to TodosTab); TodoList is what
+ * actually issues the query.
  */
 
 export type FilterValue = "all" | "completed" | "active";
 
 const OPTIONS: { value: FilterValue; label: string }[] = [
-  { value: "all", label: "Tümü" },
-  { value: "completed", label: "Tamamlanan" },
-  { value: "active", label: "Tamamlanmayan" },
+  { value: "all", label: "All" },
+  { value: "completed", label: "Completed" },
+  { value: "active", label: "Active" },
 ];
 
 export function TodoFilter({

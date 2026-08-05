@@ -1,13 +1,13 @@
 /**
- * tRPC KURULUMU (initialization)
+ * tRPC INITIALIZATION
  *
- * Bu dosya tRPC'nin "yapı taşlarını" üretir ve dışa açar:
- *   - router          → procedure'leri gruplamak için
- *   - publicProcedure → herkesin çağırabildiği endpoint tanımlayıcısı
+ * This file produces and exports tRPC's building blocks:
+ *   - router          → for grouping procedures
+ *   - publicProcedure → the definition helper for an endpoint anyone can call
  *
- * ÖNEMLİ KURAL: `initTRPC` uygulamada SADECE BİR KEZ çağrılmalı. O yüzden
- * router'ları bu dosyada tanımlamıyoruz; sadece araçları üretip export ediyoruz.
- * Router'lar `routers/` klasöründe, bu araçları import ederek yazılır.
+ * IMPORTANT RULE: `initTRPC` must be called EXACTLY ONCE per application. That
+ * is why no routers are defined here — this file only builds the tools and
+ * exports them. Routers live in `routers/`, importing what they need from here.
  */
 
 import { initTRPC } from "@trpc/server";
@@ -17,17 +17,17 @@ import type { TRPCContext } from "~/server/trpc/context";
 
 const t = initTRPC.context<TRPCContext>().create({
   /**
-   * transformer: veri ağdan geçerken JSON'ın taşıyamadığı tipleri korur.
-   * JSON'da `Date` yoktur — superjson olmasaydı `createdAt` istemciye
-   * string olarak düşerdi. superjson sayesinde client'ta gerçek `Date` olur.
+   * transformer: preserves types JSON cannot carry across the wire.
+   * JSON has no `Date` — without superjson, `createdAt` would arrive at the
+   * client as a string. With it, the client gets a real `Date`.
    */
   transformer: superjson,
 
   /**
-   * errorFormatter: sunucudan istemciye giden hata nesnesini zenginleştirir.
-   * Zod doğrulaması patladığında ham hatanın yanına `zodError` alanını
-   * ekliyoruz; frontend'de hangi alanın neden geçersiz olduğunu
-   * (ör. "title: Başlık zorunludur") buradan okuyacağız.
+   * errorFormatter: enriches the error object sent from server to client.
+   * When Zod validation fails we attach a `zodError` field alongside the raw
+   * error, so the frontend can tell WHICH field was invalid and why
+   * (e.g. "title: Title is required").
    */
   errorFormatter({ shape, error }) {
     return {
@@ -41,16 +41,16 @@ const t = initTRPC.context<TRPCContext>().create({
   },
 });
 
-/** Router oluşturucu: `createTRPCRouter({ ... })` */
+/** Router factory: `createTRPCRouter({ ... })` */
 export const createTRPCRouter = t.router;
 
 /**
- * Public procedure: kimlik doğrulaması gerektirmeyen endpoint.
- * Auth eklemek isteseydin şöyle bir "protectedProcedure" tanımlardın:
+ * Public procedure: an endpoint that requires no authentication.
+ * If you wanted auth, you would define a "protectedProcedure" like this:
  *
  *   export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
  *     if (!ctx.user) throw new TRPCError({ code: "UNAUTHORIZED" });
- *     return next({ ctx: { ...ctx, user: ctx.user } }); // user artık non-null
+ *     return next({ ctx: { ...ctx, user: ctx.user } }); // user is now non-null
  *   });
  */
 export const publicProcedure = t.procedure;

@@ -1,16 +1,16 @@
 /**
- * HTTP UÇ NOKTASI (Next.js App Router Route Handler)
+ * HTTP ENDPOINT (Next.js App Router route handler)
  *
- * tRPC'nin tek bir HTTP giriş kapısı vardır. `[trpc]` dinamik segmenti
- * sayesinde /api/trpc/todo.list, /api/trpc/todo.create ... hepsi bu dosyaya
- * düşer ve `fetchRequestHandler` doğru procedure'e yönlendirir.
+ * tRPC has a single HTTP entry point. Thanks to the `[trpc]` dynamic segment,
+ * /api/trpc/todo.list, /api/trpc/todo.create and everything else land in this
+ * file, and `fetchRequestHandler` dispatches to the right procedure.
  *
- * Akış:
+ * The flow:
  *   fetch("/api/trpc/todo.list")
  *     → fetchRequestHandler
  *     → createContext()   (context.ts)
- *     → appRouter içindeki todo.list resolver'ı
- *     → JSON yanıt (superjson ile serialize edilmiş)
+ *     → the todo.list resolver inside appRouter
+ *     → JSON response (serialized with superjson)
  */
 
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
@@ -24,14 +24,14 @@ const handler = (req: NextRequest) =>
     req,
     router: appRouter,
     createContext: createTRPCContext,
-    // Dev'de sunucu tarafındaki hataları terminalde açıkça görmek için:
+    // Makes server-side errors visible in the terminal during development:
     onError:
       process.env.NODE_ENV === "development"
         ? ({ path, error }) => {
-            console.error(`❌ tRPC hatası [${path ?? "<no-path>"}]:`, error.message);
+            console.error(`❌ tRPC error [${path ?? "<no-path>"}]:`, error.message);
           }
         : undefined,
   });
 
-// GET → query'ler, POST → mutation'lar. İkisi de aynı handler'a gider.
+// GET → queries, POST → mutations. Both go to the same handler.
 export { handler as GET, handler as POST };

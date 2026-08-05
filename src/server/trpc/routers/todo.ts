@@ -1,21 +1,22 @@
 /**
  * TODO ROUTER
  *
- * Bir router = birbirine yakın procedure'lerin sözlüğü.
- * Her procedure üç parçadan oluşur:
+ * A router is a dictionary of closely related procedures.
+ * Every procedure is built from three parts:
  *
- *   publicProcedure          → hangi procedure türü (auth kuralları vs.)
- *     .input(zodSchema)      → gelen veri doğrulaması (opsiyonel)
- *     .query() / .mutation() → çalıştırılacak fonksiyon
+ *   publicProcedure          → which kind of procedure (auth rules, etc.)
+ *     .input(zodSchema)      → validation of incoming data (optional)
+ *     .query() / .mutation() → the function that runs
  *
- * query   → veri OKUR, yan etkisi yoktur, cache'lenir (HTTP GET gibi)
- * mutation→ veri DEĞİŞTİRİR, cache'lenmez (HTTP POST gibi)
+ * query    → READS data, has no side effects, is cached (like HTTP GET)
+ * mutation → CHANGES data, is not cached (like HTTP POST)
  *
- * Resolver'a gelen `{ ctx, input }`:
- *   ctx   → context.ts'de kurduğumuz nesne (db, headers...)
- *   input → Zod'dan GEÇMİŞ, doğrulanmış ve tipi çıkarılmış veri.
- *           Yani burada `input.title`'ın string olduğuna güvenebilirsin;
- *           şema geçersizse resolver hiç çalışmaz, tRPC BAD_REQUEST döner.
+ * The `{ ctx, input }` a resolver receives:
+ *   ctx   → the object built in context.ts (db, headers, ...)
+ *   input → data that has ALREADY PASSED Zod: validated and typed.
+ *           So you can trust that `input.title` is a string here; if the
+ *           schema rejects it the resolver never runs and tRPC returns
+ *           BAD_REQUEST.
  */
 
 import { TRPCError } from "@trpc/server";
@@ -28,8 +29,9 @@ import {
 
 export const todoRouter = createTRPCRouter({
   /**
-   * 1) create — yeni todo oluşturur.
-   * title zorunlu, description opsiyonel (kurallar Zod şemasında).
+   * 1) create — creates a new todo.
+   * title is required, description is optional (the rules live in the Zod
+   * schema).
    */
   create: publicProcedure
     .input(createTodoSchema)
@@ -37,31 +39,32 @@ export const todoRouter = createTRPCRouter({
       return ctx.db.todo.create({
         data: {
           title: input.title,
-          description: input.description, // undefined ise DB'de NULL kalır
+          description: input.description, // undefined stays NULL in the database
         },
       });
     }),
 
   /**
-   * 2) list — todo'ları döner.
-   * `completed` filtresi opsiyonel: verilmezse WHERE koşulu hiç eklenmez,
-   * yani hepsi döner.
+   * 2) list — returns todos.
+   * The `completed` filter is optional: omit it and no WHERE clause is added
+   * at all, so everything comes back.
    */
   list: publicProcedure.input(listTodosSchema).query(async ({ ctx, input }) => {
     return ctx.db.todo.findMany({
-      // Prisma'da bir alan `undefined` ise o koşul sorguya HİÇ eklenmez.
-      // (`null` olsaydı "completed IS NULL" diye aranırdı — fark önemli.)
+      // In Prisma, a field set to `undefined` drops that condition from the
+      // query entirely. (`null` would instead search for "completed IS NULL" —
+      // an important difference.)
       where: { completed: input?.completed },
       orderBy: { createdAt: "desc" },
     });
   }),
 
   /**
-   * 3) toggle — completed durumunu tersine çevirir.
+   * 3) toggle — flips the completed flag.
    *
-   * SQL'de "değeri tersine çevir" diye tek adımlık bir Prisma yardımcısı yok,
-   * bu yüzden önce okuyup sonra yazıyoruz. Kayıt yoksa NOT_FOUND fırlatıyoruz;
-   * bu hata istemcide `mutation.error.data.code` olarak okunabilir.
+   * Prisma has no single-step "invert this value" helper, so we read first and
+   * then write. If the row is missing we throw NOT_FOUND; the client reads
+   * that back as `mutation.error.data.code`.
    */
   toggle: publicProcedure
     .input(todoIdSchema)
@@ -71,7 +74,7 @@ export const todoRouter = createTRPCRouter({
       if (!todo) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: "Todo bulunamadı",
+          message: "Todo not found",
         });
       }
 
@@ -82,23 +85,23 @@ export const todoRouter = createTRPCRouter({
     }),
 
   /**
-   * 4) delete — todo'yu siler.
+   * 4) delete — removes a todo.
    *
-   * Not: `delete` JavaScript'te bir anahtar kelime ama nesne özelliği olarak
-   * kullanmak tamamen geçerli. İstemcide `trpc.todo.delete.useMutation()`
-   * şeklinde çağıracağız.
+   * Note: `delete` is a JavaScript keyword, but using it as an object property
+   * is perfectly valid. On the client we will call it as
+   * `trpc.todo.delete.useMutation()`.
    */
   delete: publicProcedure
     .input(todoIdSchema)
     .mutation(async ({ ctx, input }) => {
-      // Var olmayan id'de Prisma P2025 fırlatır; onu anlamlı bir tRPC
-      // hatasına çeviriyoruz ki istemci düzgün bir mesaj görsün.
+      // Prisma throws P2025 for a missing id; we translate that into a
+      // meaningful tRPC error so the client can show a usable message.
       const existing = await ctx.db.todo.findUnique({ where: { id: input.id } });
 
       if (!existing) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: "Silinecek todo bulunamadı",
+          message: "Todo to delete was not found",
         });
       }
 

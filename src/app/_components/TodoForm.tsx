@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * TODO EKLEME FORMU — `useMutation` + cache invalidation + hata yakalama
+ * ADD TODO FORM — `useMutation` + cache invalidation + error handling
  */
 
 import { useState } from "react";
@@ -11,36 +11,36 @@ import { createTodoSchema } from "~/server/trpc/schemas/todo";
 export function TodoForm() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  /** İSTEMCİ TARAFI hata: sunucuya gitmeden yakaladıklarımız */
+  /** CLIENT-SIDE error: what we catch before ever reaching the server. */
   const [clientError, setClientError] = useState<string | null>(null);
 
   /**
-   * useUtils() → React Query cache'ine erişim kapısı.
-   * Router'ın şeklini birebir taşır: utils.todo.list.invalidate() gibi.
+   * useUtils() → the door into React Query's cache.
+   * It mirrors the router's shape exactly: utils.todo.list.invalidate(), etc.
    */
   const utils = trpc.useUtils();
 
   const createTodo = trpc.todo.create.useMutation({
     /**
-     * CACHE INVALIDATION — tRPC'de en kritik kalıp.
+     * CACHE INVALIDATION — the single most important pattern in tRPC.
      *
-     * Sorun: `todo.list` query'sinin sonucu React Query cache'inde duruyor.
-     * Yeni bir todo eklediğimizde cache eski listeyi göstermeye devam eder;
-     * React Query sunucuda bir şey değiştiğini kendiliğinden BİLEMEZ.
+     * The problem: the result of the `todo.list` query is sitting in React
+     * Query's cache. After adding a todo the cache keeps showing the old list,
+     * because React Query has NO WAY to know something changed on the server.
      *
-     * Çözüm: mutation başarılı olunca ilgili query'yi "bayat" ilan ederiz.
-     * React Query o query'yi ekranda kullanan tüm bileşenler için otomatik
-     * yeniden çeker (refetch) ve UI tazelenir.
+     * The fix: once the mutation succeeds, mark the relevant query stale.
+     * React Query then refetches it for every component currently displaying
+     * it, and the UI catches up.
      *
-     * Kapsam seçimi (prefix eşleşmesine göre çalışır):
-     *   utils.todo.list.invalidate()                → tüm list varyantları
-     *                                                 (her filtre değeri dahil)
-     *   utils.todo.list.invalidate({ completed: true }) → sadece o input'lu query
-     *   utils.todo.invalidate()                     → todo router'ının tamamı
-     *   utils.invalidate()                          → her şey
+     * Choosing the scope (matching works by prefix):
+     *   utils.todo.list.invalidate()                    → every list variant
+     *                                                     (all filter values)
+     *   utils.todo.list.invalidate({ completed: true }) → only that one input
+     *   utils.todo.invalidate()                         → the whole todo router
+     *   utils.invalidate()                              → everything
      *
-     * Burada tüm varyantları tazeliyoruz: yeni todo "Tümü" ve "Tamamlanmayan"
-     * listelerini birden etkiliyor.
+     * Here we refresh every variant: a new todo affects both the "All" and the
+     * "Active" lists at once.
      */
     onSuccess: async () => {
       await utils.todo.list.invalidate();
@@ -54,17 +54,17 @@ export function TodoForm() {
     e.preventDefault();
 
     /**
-     * HATA YAKALAMA — 1. KATMAN (istemci)
-     * Sunucudaki ile AYNI Zod şemasını burada da çalıştırıyoruz. safeParse
-     * exception fırlatmaz, `{ success, error }` döner. Boş title'ı gereksiz
-     * bir network isteği yapmadan burada yakalıyoruz.
+     * ERROR HANDLING — LAYER 1 (client)
+     * We run the SAME Zod schema the server uses. `safeParse` does not throw;
+     * it returns `{ success, error }`. An empty title is caught right here,
+     * without spending a network request on it.
      */
     const parsed = createTodoSchema.safeParse({ title, description });
 
     if (!parsed.success) {
       // flatten().fieldErrors → { title?: string[]; description?: string[] }
       const errors = parsed.error.flatten().fieldErrors;
-      setClientError(errors.title?.[0] ?? errors.description?.[0] ?? "Geçersiz giriş");
+      setClientError(errors.title?.[0] ?? errors.description?.[0] ?? "Invalid input");
       return;
     }
 
@@ -73,13 +73,14 @@ export function TodoForm() {
   }
 
   /**
-   * HATA YAKALAMA — 2. KATMAN (sunucu)
-   * İstemci doğrulaması atlansa bile (ör. mutate'i konsoldan çağırsan)
-   * sunucu yine reddeder. O hata `createTodo.error` içinde gelir.
+   * ERROR HANDLING — LAYER 2 (server)
+   * Even if the client check is bypassed (calling `mutate` from the console,
+   * say), the server still rejects it. That failure arrives in
+   * `createTodo.error`.
    *
-   * trpc.ts'deki errorFormatter sayesinde alan bazlı detay da var:
-   *   error.data.zodError.fieldErrors.title → ["Başlık zorunludur"]
-   * Yoksa genel mesaja düşüyoruz.
+   * Thanks to the errorFormatter in trpc.ts we also get per-field detail:
+   *   error.data.zodError.fieldErrors.title → ["Title is required"]
+   * Otherwise we fall back to the generic message.
    */
   const serverError =
     createTodo.error?.data?.zodError?.fieldErrors?.title?.[0] ??
@@ -95,27 +96,27 @@ export function TodoForm() {
     >
       <div>
         <label htmlFor="title" className="mb-1 block text-sm font-medium">
-          Başlık <span className="text-red-500">*</span>
+          Title <span className="text-red-500">*</span>
         </label>
         <input
           id="title"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="Ne yapman gerekiyor?"
+          placeholder="What needs doing?"
           className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-900"
         />
       </div>
 
       <div>
         <label htmlFor="description" className="mb-1 block text-sm font-medium">
-          Açıklama <span className="text-slate-400">(opsiyonel)</span>
+          Description <span className="text-slate-400">(optional)</span>
         </label>
         <textarea
           id="description"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           rows={2}
-          placeholder="Detay eklemek istersen..."
+          placeholder="Add details if you want..."
           className="w-full resize-none rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-900"
         />
       </div>
@@ -128,11 +129,11 @@ export function TodoForm() {
 
       <button
         type="submit"
-        // `isPending` → mutation uçuşta. Çift gönderimi engellemek için.
+        // `isPending` → the mutation is in flight. Prevents double submits.
         disabled={createTodo.isPending}
         className="w-full rounded-lg bg-slate-900 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
       >
-        {createTodo.isPending ? "Ekleniyor..." : "Todo Ekle"}
+        {createTodo.isPending ? "Adding..." : "Add todo"}
       </button>
     </form>
   );

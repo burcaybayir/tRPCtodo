@@ -1,6 +1,6 @@
-// Prisma şeması: veritabanı tablolarının tek kaynağı (source of truth).
-// `prisma db push` bu dosyayı okuyup SQLite dosyasında tabloyu oluşturur,
-// `prisma generate` ise bu modelden TypeScript tiplerini üretir.
+// Prisma schema: the single source of truth for the database tables.
+// `prisma migrate` reads this file and creates the tables in the SQLite file;
+// `prisma generate` derives the TypeScript types from the same models.
 
 generator client {
   provider = "prisma-client-js"
@@ -14,11 +14,11 @@ datasource db {
 model Todo {
   id          String   @id @default(cuid())
   title       String
-  description String?  // `?` = opsiyonel → TS tarafında `string | null`
+  description String?  // `?` = optional → `string | null` on the TypeScript side
   completed   Boolean  @default(false)
   createdAt   DateTime @default(now())
 
-  // En yeni todo'ları hızlı sıralayabilmek için index.
+  // Index so the newest todos can be ordered quickly.
   @@index([createdAt])
 }
 
