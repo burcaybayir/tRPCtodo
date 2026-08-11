@@ -30,10 +30,11 @@ Prisma types).
 npx prisma migrate deploy
 ```
 
-Applies the three migrations under `prisma/migrations/` in order: `0_init` (the
-Todo table), `..._add_user_and_task` (the User and Task tables) and
+Applies the four migrations under `prisma/migrations/` in order: `0_init` (the
+Todo table), `..._add_user_and_task` (the User and Task tables),
 `..._add_team_and_comment` (Team, Comment, and the team foreign keys on User and
-Task). No separate database server to install — SQLite is a single file.
+Task) and `..._add_voice_message` (the VoiceMessage table). No separate database
+server to install — SQLite is a single file.
 
 > If you change the schema yourself, create a new migration with
 > `npx prisma migrate dev --name <name>`. `prisma db push` also works, but it
@@ -212,6 +213,49 @@ whenever it has something to say.
 | `src/lib/apollo/teamOperations.ts` | The team documents, including the shallow/deep pair |
 | `src/app/_components/team/` | CreateTeamForm, TeamPicker, AddUserToTeamForm, TeamOverview, PaginatedTaskList, TaskDetail |
 
+### Voice message (self-contained)
+
+A small feature deliberately kept apart from the machinery above: no DataLoader,
+no PubSub, no cursors. It demonstrates one thing — **storing a file reference
+rather than the file**.
+
+| File | What it does |
+|---|---|
+| `src/server/storage.ts` | Local stand-in for object storage, plus the long note on why the audio is not in the database |
+| `src/app/api/upload/route.ts` | The one endpoint that speaks binary; returns a URL |
+| `src/server/graphql/voice/typeDefs.ts` | VoiceMessage type, `extend type Task`, two mutations |
+| `src/server/graphql/voice/resolvers.ts` | The upsert, and the ordering rule for row-vs-file writes |
+| `src/lib/apollo/voiceOperations.ts` | The voice documents |
+| `src/app/_components/team/VoiceMessagePanel.tsx` | Recorder, file upload, `<audio>` player, Remove |
+
+**The audio never travels over GraphQL.** GraphQL carries JSON, so a file would
+have to be base64 (a third larger, buffered whole on both ends) or use the
+multipart spec (another layer for every client and server in the chain). Instead
+the upload is a plain `POST /api/upload` that returns a URL, and
+`attachVoiceMessage` takes a `String!`. Two steps:
+
+```
+1.  browser → POST /api/upload        (multipart)  → { url, mimeType, sizeBytes }
+2.  browser → attachVoiceMessage(taskId, url, …)   → the row
+```
+
+In production step 1 becomes a signed URL and the browser PUTs straight to
+S3/R2, so the bytes never pass through the API at all. Step 2 does not change —
+which is exactly why the two are split.
+
+**Why only the reference is persisted.** Blobs in rows bloat every backup and
+replica sync, evict the pages queries actually need from the database's working
+set, and turn a static asset into application load — where object storage gives
+you CDN delivery and range requests (what `<audio>` needs in order to seek) for
+free. So the table keeps the URL plus the metadata worth having without fetching
+the audio: duration, mime type, size, upload time.
+
+**The cost:** a row and a file are two systems with no transaction spanning
+them. The resolver therefore writes the row first and deletes the old file
+second — a failed delete leaks bytes, while a failed write would leave a URL
+pointing at nothing and a broken player for every viewer. Given the choice,
+leak the bytes and reconcile later.
+
 ## The three GraphQL techniques in this tab
 
 **Nested queries at two depths.** `TeamPicker.tsx` asks `team(id) { id name }`;
@@ -310,3 +354,18 @@ stays fast at page 10,000 where `OFFSET 100000` does not.
     connection. Restart it and the subscription reattaches — but comments posted
     while it was down never arrive. A subscription is a live feed, not a durable
     queue; if gaps matter, refetch on reconnect.
+
+### Voice message
+
+16. Attach a voice message, then attach another one. Watch `public/uploads/`:
+    the file count stays at one and the row keeps the same id. That is the
+    `upsert` on the unique `taskId` — attach and replace are one operation
+    because the relation is 1-1.
+17. In `voice/resolvers.ts`, move `deleteStoredFile(previous.url)` to BEFORE the
+    upsert, then make the upsert fail (pass a bad `taskId`). You now have a row
+    pointing at a file that no longer exists, and a player that renders a 404.
+    Put it back and the worst case is an unreferenced file instead. Ordering is
+    the entire safety argument when two systems have no shared transaction.
+18. Upload something that is not audio (`curl -F "file=@package.json;type=application/json"`)
+    → `Unsupported audio type`. The stored filename is generated too, never
+    taken from the client: a client-supplied name is a client-supplied path.

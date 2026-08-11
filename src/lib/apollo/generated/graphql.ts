@@ -44,11 +44,33 @@ export type Mutation = {
    * Returns the updated task so the client can read back the new state.
    */
   assignTaskToUser: Task;
+  /**
+   * Attaches a voice message to a task, replacing any existing one.
+   *
+   * UPSERT, not create. The relation is 1-1, so "attach" and "replace" are the
+   * same operation from the caller's point of view — and modelling them as one
+   * mutation removes a whole class of client-side branching (check if one
+   * exists, then choose between two mutations, and race with anyone else doing
+   * the same).
+   *
+   * url comes from POST /api/upload. mimeType and sizeBytes are optional
+   * extras: the upload endpoint already knows both, so passing them through
+   * keeps the row complete without a second round trip.
+   */
+  attachVoiceMessage: VoiceMessage;
   /** Creates an unassigned task. */
   createTask: Task;
   createTeam: Team;
   /** Creates a user with no task assigned. */
   createUser: User;
+  /**
+   * Detaches the voice message from a task and deletes the stored file.
+   *
+   * Returns true when something was removed, false when the task had none.
+   * A missing task is an error; a missing voice message is not — asking to
+   * remove what is already absent has arrived at the requested state.
+   */
+  removeVoiceMessage: Scalars['Boolean']['output'];
   /** Breaks the link, leaving both the task and the user free again. */
   unassignTask: Task;
 };
@@ -79,6 +101,15 @@ export type MutationAssignTaskToUserArgs = {
 };
 
 
+export type MutationAttachVoiceMessageArgs = {
+  duration?: InputMaybe<Scalars['Int']['input']>;
+  mimeType?: InputMaybe<Scalars['String']['input']>;
+  sizeBytes?: InputMaybe<Scalars['Int']['input']>;
+  taskId: Scalars['ID']['input'];
+  url: Scalars['String']['input'];
+};
+
+
 export type MutationCreateTaskArgs = {
   description: Scalars['String']['input'];
   name: Scalars['String']['input'];
@@ -94,6 +125,11 @@ export type MutationCreateTeamArgs = {
 export type MutationCreateUserArgs = {
   age: Scalars['Int']['input'];
   name: Scalars['String']['input'];
+};
+
+
+export type MutationRemoveVoiceMessageArgs = {
+  taskId: Scalars['ID']['input'];
 };
 
 
@@ -242,6 +278,7 @@ export type Task = {
    * Also resolved by a field resolver, not read from the parent row directly.
    */
   user: Maybe<User>;
+  voiceMessage: Maybe<VoiceMessage>;
 };
 
 /**
@@ -295,6 +332,27 @@ export type User = {
   task: Maybe<Task>;
   /** The team this user belongs to, or null. */
   team: Maybe<Team>;
+};
+
+/**
+ * A recorded audio note attached to a task.
+ *
+ * Every field here is a REFERENCE or a piece of METADATA — never the audio.
+ * Metadata is chosen for what the UI needs before (or without) playing the
+ * file: a duration to render, a mime type to hand the audio element, a size to
+ * warn about, a timestamp to sort by.
+ */
+export type VoiceMessage = {
+  /** Length in seconds. Nullable because the browser cannot always measure it. */
+  duration: Maybe<Scalars['Int']['output']>;
+  id: Scalars['ID']['output'];
+  mimeType: Scalars['String']['output'];
+  /** Byte size, if the uploader reported it. */
+  sizeBytes: Maybe<Scalars['Int']['output']>;
+  /** ISO-8601 string. */
+  uploadedAt: Scalars['String']['output'];
+  /** Where the file actually lives. Fetched by the browser, not by the API. */
+  url: Scalars['String']['output'];
 };
 
 export type GetUsersQueryVariables = Exact<{ [key: string]: never; }>;
@@ -413,3 +471,28 @@ export type CommentAddedSubscriptionVariables = Exact<{
 
 
 export type CommentAddedSubscription = { commentAdded: { id: string, content: string, createdAt: string, author: { id: string, name: string } } };
+
+export type GetTaskVoiceMessageQueryVariables = Exact<{
+  id: string | number;
+}>;
+
+
+export type GetTaskVoiceMessageQuery = { task: { id: string, voiceMessage: { id: string, url: string, duration: number | null, mimeType: string, sizeBytes: number | null, uploadedAt: string } | null } | null };
+
+export type AttachVoiceMessageMutationVariables = Exact<{
+  taskId: string | number;
+  url: string;
+  duration?: number | null | undefined;
+  mimeType?: string | null | undefined;
+  sizeBytes?: number | null | undefined;
+}>;
+
+
+export type AttachVoiceMessageMutation = { attachVoiceMessage: { id: string, url: string, duration: number | null, mimeType: string, sizeBytes: number | null, uploadedAt: string } };
+
+export type RemoveVoiceMessageMutationVariables = Exact<{
+  taskId: string | number;
+}>;
+
+
+export type RemoveVoiceMessageMutation = { removeVoiceMessage: boolean };

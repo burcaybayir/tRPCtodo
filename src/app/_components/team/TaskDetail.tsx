@@ -28,6 +28,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useSubscription } from "@apollo/client/react";
+import { VoiceMessagePanel } from "~/app/_components/team/VoiceMessagePanel";
 import { GET_USERS } from "~/lib/apollo/operations";
 import {
   ADD_COMMENT_TO_TASK,
@@ -178,6 +179,13 @@ export function TaskDetail({ taskId }: { taskId: string }) {
           </ul>
         )}
       </div>
+
+      {/*
+        Self-contained: it runs its own query and its own mutations, and shares
+        nothing with the comment thread above. Delete this one line and the
+        voice feature disappears from the UI without touching anything else.
+      */}
+      <VoiceMessagePanel taskId={taskId} />
 
       <form onSubmit={handleSubmit} className="space-y-2 border-t border-slate-100 pt-3">
         <select

@@ -40,12 +40,14 @@ const config: CodegenConfig = {
     // `extend type Task` resolves here too — list both and the generated types
     // see one unified schema.
     "src/server/graphql/team/typeDefs.ts",
+    "src/server/graphql/voice/typeDefs.ts",
   ],
 
   /** Where the client's queries and mutations live. */
   documents: [
     "src/lib/apollo/operations.ts",
     "src/lib/apollo/teamOperations.ts",
+    "src/lib/apollo/voiceOperations.ts",
   ],
 
   generates: {

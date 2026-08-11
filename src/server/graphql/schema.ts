@@ -25,8 +25,13 @@ import { typeDefs } from "~/server/graphql/typeDefs";
 import { resolvers } from "~/server/graphql/resolvers";
 import { teamTypeDefs } from "~/server/graphql/team/typeDefs";
 import { teamResolvers } from "~/server/graphql/team/resolvers";
+import { voiceTypeDefs } from "~/server/graphql/voice/typeDefs";
+import { voiceResolvers } from "~/server/graphql/voice/resolvers";
 
 export const schema = makeExecutableSchema({
-  typeDefs: [typeDefs, teamTypeDefs],
-  resolvers: [resolvers, teamResolvers],
+  // Three features, three pairs, one schema. `Task` now collects fields from
+  // all three: `user` from the first, `comments` and `team` from the second,
+  // `voiceMessage` from the third — and no file references any other.
+  typeDefs: [typeDefs, teamTypeDefs, voiceTypeDefs],
+  resolvers: [resolvers, teamResolvers, voiceResolvers],
 });

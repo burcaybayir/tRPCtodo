@@ -72,6 +72,10 @@ model Task {
   teamId   String?
   comments Comment[]
 
+  // --- Voice message feature ---
+  // Virtual side again: the foreign key lives on VoiceMessage.
+  voiceMessage VoiceMessage?
+
   @@index([teamId])
 }
 
@@ -110,4 +114,55 @@ model Comment {
   // and indexing solve different halves of the same problem.
   @@index([taskId])
   @@index([authorId])
+}
+
+// ---------------------------------------------------------------------------
+// Voice message feature.
+//
+// WHY THE AUDIO FILE IS NOT IN THIS TABLE
+//
+// Prisma could happily store a `Bytes` column and SQLite would accept it. It is
+// still the wrong place, for reasons that compound as the app grows:
+//
+//   Backups. A database dump is normally text-ish and cheap to move. Fill it
+//   with megabytes of audio and every backup, restore and replica sync drags
+//   those bytes along — even when you only wanted the rows.
+//
+//   Working set. Databases keep hot pages in memory. Binary blobs interleaved
+//   with the rows evict the data that queries actually filter and join on, so
+//   the whole table gets slower to serve a field almost nobody selects.
+//
+//   Delivery. A file in object storage is served straight to the browser by a
+//   CDN, with range requests and caching for free — exactly what an <audio>
+//   element needs in order to seek. A blob in a row has to be pulled through
+//   the database connection, through the API process, and back out again,
+//   turning a static asset into application load.
+//
+//   Streaming. Row-level blobs must be read whole. Object storage streams by
+//   design.
+//
+// So the file goes to storage and the DATABASE KEEPS THE REFERENCE: a URL plus
+// the metadata you want to display or filter on without fetching the audio
+// (duration, mime type, size, upload time). Rows stay small, queries stay fast,
+// and the bytes live where bytes belong.
+//
+// The tradeoff to know about: these are now two systems that can disagree.
+// Deleting a row does not delete the file, and a failed upload can leave a row
+// pointing at nothing. See src/server/storage.ts.
+// ---------------------------------------------------------------------------
+
+model VoiceMessage {
+  id         String   @id @default(cuid())
+  url        String
+  duration   Int?
+  mimeType   String   @default("audio/webm")
+  sizeBytes  Int?
+  uploadedAt DateTime @default(now())
+
+  // onDelete: Cascade so removing a task cannot leave an orphan row behind.
+  // Note it does NOT remove the stored file — see the note above.
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId String @unique
+  // ^ @unique makes this 1-1: a task has at most one voice message.
+  //   It is also what lets the resolver use a single `upsert` keyed on taskId.
 }
