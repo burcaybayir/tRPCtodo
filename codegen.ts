@@ -33,10 +33,20 @@ const config: CodegenConfig = {
    * introspecting a live server, is also supported and is what you would use
    * against an API you do not own.)
    */
-  schema: "src/server/graphql/typeDefs.ts",
+  schema: [
+    "src/server/graphql/typeDefs.ts",
+    // The Team & Activity SDL is a separate document that extends types from
+    // the first one. Codegen merges them exactly as the server does, so
+    // `extend type Task` resolves here too — list both and the generated types
+    // see one unified schema.
+    "src/server/graphql/team/typeDefs.ts",
+  ],
 
   /** Where the client's queries and mutations live. */
-  documents: ["src/lib/apollo/operations.ts"],
+  documents: [
+    "src/lib/apollo/operations.ts",
+    "src/lib/apollo/teamOperations.ts",
+  ],
 
   generates: {
     "src/lib/apollo/generated/graphql.ts": {

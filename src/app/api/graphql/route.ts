@@ -18,8 +18,7 @@
 import { ApolloServer } from "@apollo/server";
 import { startServerAndCreateNextHandler } from "@as-integrations/next";
 import type { NextRequest } from "next/server";
-import { typeDefs } from "~/server/graphql/typeDefs";
-import { resolvers } from "~/server/graphql/resolvers";
+import { schema } from "~/server/graphql/schema";
 import {
   createGraphQLContext,
   type GraphQLContext,
@@ -28,14 +27,19 @@ import {
 /**
  * The server is created once at module load, not per request.
  *
- * At this moment Apollo validates the SDL against the resolver map: a type
- * declared in typeDefs.ts with no matching implementation, or a resolver for a
- * field that does not exist in the schema, fails HERE — at startup, not on the
- * first request that happens to touch it.
+ * It takes a prebuilt `schema` rather than `{ typeDefs, resolvers }` so the
+ * WebSocket server in server.ts can execute the exact same schema object —
+ * see src/server/graphql/schema.ts. Validation still happens where it did
+ * before, just one step earlier: a resolver for a field that does not exist
+ * fails when the schema is BUILT, not on the first request that touches it.
+ *
+ * This route serves queries and mutations only. Subscriptions cannot travel
+ * over it — a route handler returns a Response and exits, so there is no
+ * connection left to push events into. They are served over WebSocket instead;
+ * server.ts explains the split.
  */
 const server = new ApolloServer<GraphQLContext>({
-  typeDefs,
-  resolvers,
+  schema,
 });
 
 const handler = startServerAndCreateNextHandler<NextRequest, GraphQLContext>(

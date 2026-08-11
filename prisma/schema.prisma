@@ -39,6 +39,15 @@ model User {
   // database. Prisma derives it by looking for the Task row whose userId
   // points here. Optional (`?`) because a user may have no task yet.
   task Task?
+
+  // --- Team & Activity feature ---
+  // A user belongs to at most one team (the many side of a 1-N relation), and
+  // writes many comments.
+  team     Team?     @relation(fields: [teamId], references: [id])
+  teamId   String?
+  comments Comment[]
+
+  @@index([teamId])
 }
 
 model Task {
@@ -54,4 +63,51 @@ model Task {
   //   Without it, many tasks could share a userId. With it, the database
   //   itself rejects a second task pointing at the same user — so the
   //   invariant survives even if application code has a bug.
+
+  // --- Team & Activity feature ---
+  // Contrast with `userId` above: NO @unique here, so many tasks can share one
+  // teamId. Dropping that single keyword is the whole difference between a
+  // 1-1 and a 1-N relation.
+  team     Team?     @relation(fields: [teamId], references: [id])
+  teamId   String?
+  comments Comment[]
+
+  @@index([teamId])
+}
+
+// ---------------------------------------------------------------------------
+// Team & Activity feature (GraphQL, third tab).
+//
+// Adds the relation shapes the earlier features lacked: 1-N (Team → users,
+// Team → tasks) and a join-like child collection (Task → comments) that is
+// what makes DataLoader worth implementing.
+// ---------------------------------------------------------------------------
+
+model Team {
+  id   String @id @default(cuid())
+  name String
+
+  // Both are "virtual" sides again — the foreign keys live on User and Task.
+  users User[]
+  tasks Task[]
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  content   String
+  createdAt DateTime @default(now())
+
+  // Both relations are REQUIRED (no `?`): a comment with no task or no author
+  // is meaningless, so the database refuses to store one.
+  task     Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId   String
+  author   User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  authorId String
+
+  // This index is what makes the DataLoader batch query fast: the batched
+  // lookup is `WHERE taskId IN (...)`, and without an index on taskId that is
+  // a full table scan no matter how well the requests are batched. Batching
+  // and indexing solve different halves of the same problem.
+  @@index([taskId])
+  @@index([authorId])
 }

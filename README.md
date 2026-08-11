@@ -1,16 +1,21 @@
 # tRPC + GraphQL — a learning project
 
-One Next.js app, one database, **two independent API layers** running side by side:
+One Next.js app, one database, **three independent API surfaces** side by side:
 
 | Tab | API | Endpoint | Client | Cache |
 |---|---|---|---|---|
 | **Todos** | tRPC | `/api/trpc` | `@trpc/react-query` | React Query |
 | **Task Assignment** | GraphQL | `/api/graphql` | Apollo Client | Apollo `InMemoryCache` |
+| **Team & Activity** | GraphQL + WebSocket | `/api/graphql` and `/api/graphql/ws` | Apollo Client | Apollo `InMemoryCache` |
 
-Both write to the same SQLite file through the same Prisma client. Everything
-above the database is separate — the Todos tab never touches Apollo, and the
-Task Assignment tab never touches tRPC. The point is to solve comparable
-problems in two protocols and see the differences next to each other.
+All three write to the same SQLite file through the same Prisma client.
+Everything above the database is separate — the Todos tab never touches Apollo,
+and neither GraphQL tab touches tRPC. The point is to solve comparable problems
+in different protocols and see the differences next to each other.
+
+The third tab exists to exercise the parts of GraphQL the second one had no
+reason to use: **nested queries** at two depths against one field, **DataLoader**
+batching, **cursor pagination**, and **subscriptions** over WebSocket.
 
 ## Setup
 
@@ -25,9 +30,10 @@ Prisma types).
 npx prisma migrate deploy
 ```
 
-Applies the two migrations under `prisma/migrations/` in order: `0_init` (the
-Todo table) and `..._add_user_and_task` (the User and Task tables). No separate
-database server to install — SQLite is a single file.
+Applies the three migrations under `prisma/migrations/` in order: `0_init` (the
+Todo table), `..._add_user_and_task` (the User and Task tables) and
+`..._add_team_and_comment` (Team, Comment, and the team foreign keys on User and
+Task). No separate database server to install — SQLite is a single file.
 
 > If you change the schema yourself, create a new migration with
 > `npx prisma migrate dev --name <name>`. `prisma db push` also works, but it
@@ -48,7 +54,29 @@ npm run dev
 
 - App: http://localhost:3000
 - GraphQL explorer (Apollo Sandbox): http://localhost:3000/api/graphql
+- GraphQL WebSocket: ws://localhost:3000/api/graphql/ws
 - Database browser: `npm run db:studio`
+
+### About the custom server
+
+`npm run dev` runs `tsx server.ts`, **not** `next dev`. That is the one
+unavoidable structural change the subscription forced.
+
+A Next.js route handler is invoked per request and must return a Response, so it
+has nowhere to hold a WebSocket open between calls. `server.ts` is a plain Node
+HTTP server that hands every ordinary request to Next.js and intercepts only the
+WebSocket upgrade on `/api/graphql/ws`. One process, one port, two transports —
+and one shared in-memory PubSub, which is why the mutation (HTTP) and the
+subscription (WebSocket) can talk to each other at all.
+
+`npm run dev:no-ws` still runs plain `next dev` if you want to see the app
+without the WebSocket. The Todos and Task Assignment tabs work identically
+there; in the Team tab everything works except live comment delivery.
+
+The cost of a custom server is real: it opts out of Next.js's automatic static
+optimisation and cannot be deployed to serverless platforms as-is. Production
+GraphQL APIs with subscriptions usually run as their own long-lived service for
+exactly this reason.
 
 ## How a request flows
 
@@ -100,6 +128,34 @@ Browser
   Browser: exactly the fields that were asked for
 ```
 
+And the subscription, which is a different shape entirely:
+
+```
+Browser
+  useSubscription(COMMENT_ADDED_SUBSCRIPTION, { variables: { taskId } })
+        │  the split link in client.ts routes subscriptions to the WS link
+        ▼
+  GraphQLWsLink  →  ws://localhost:3000/api/graphql/ws        ← opens, STAYS OPEN
+        │
+        ▼  server.ts (WebSocketServer + graphql-ws useServer)
+  Subscription.commentAdded
+        │  subscribes to the in-memory PubSub and then waits, possibly for hours
+        ⋮
+        ⋮   ...meanwhile, over on HTTP...
+        ⋮
+  POST /api/graphql  →  Mutation.addCommentToTask
+        │                  writes the row, then pubsub.publish(COMMENT_ADDED)
+        ▼
+  withFilter drops the event for every subscriber on a different task
+        │
+        ▼  server pushes down the still-open socket
+  Browser: onData → cache.updateQuery appends the comment. No refetch.
+```
+
+Read that vertically: the client never asks a second time. The request that
+delivers the data was made once, minutes earlier, and the server writes into it
+whenever it has something to say.
+
 ## The two APIs side by side
 
 | | tRPC (Todos) | GraphQL (Task Assignment) |
@@ -143,6 +199,47 @@ Browser
 | `codegen.ts` | Codegen configuration |
 | `src/app/_components/task/` | CreateUserForm, CreateTaskForm, AssignTaskForm, EntityLists, AssignmentsTable |
 
+### Team & Activity side
+
+| File | What it does |
+|---|---|
+| `server.ts` | Custom Node server: Next.js + the WebSocket endpoint in one process |
+| `src/server/graphql/schema.ts` | Merges both SDL documents and both resolver maps into one executable schema, shared by HTTP and WS |
+| `src/server/graphql/team/typeDefs.ts` | Team/Comment types, `extend type Task`, the connection types, the Subscription |
+| `src/server/graphql/team/resolvers.ts` | Pagination, mutations, the subscription, and both the batched and naive comment resolvers |
+| `src/server/graphql/team/loaders.ts` | **DataLoader** — the batch function, and why it must be per request |
+| `src/server/graphql/team/pubsub.ts` | The in-memory event channel, pinned to `globalThis` so both halves share it |
+| `src/lib/apollo/teamOperations.ts` | The team documents, including the shallow/deep pair |
+| `src/app/_components/team/` | CreateTeamForm, TeamPicker, AddUserToTeamForm, TeamOverview, PaginatedTaskList, TaskDetail |
+
+## The three GraphQL techniques in this tab
+
+**Nested queries at two depths.** `TeamPicker.tsx` asks `team(id) { id name }`;
+`TeamOverview.tsx` asks the same field four levels deep, down to each task's
+comments and their authors. One field, two callers, two very different amounts
+of server work — and the shallow one never touches the Comment table.
+
+**DataLoader.** `Task.comments` goes through a per-request loader that collects
+every task id queued in one tick of the event loop and issues a single
+`WHERE taskId IN (...)`. `Task.commentsNaive` does the same job without
+batching. Both log to the server terminal, so the difference is measurable
+rather than theoretical:
+
+```
+[DataLoader] batch #1: 1 query for 4 task(s) → WHERE taskId IN (4 ids)
+```
+```
+[N+1] query #1 for task cm...   [N+1] query #2 for task cm...
+[N+1] query #3 for task cm...   [N+1] query #4 for task cm...
+```
+
+**Cursor pagination.** `tasksConnection` returns Relay-style edges with opaque
+base64 cursors. Offset pagination (`skip: 20`) measures against a result set
+that moves while you read it: an insert above your position shows you a
+duplicate, a delete silently skips a row. A cursor anchors on a ROW, so
+concurrent writes elsewhere cannot shift it — and `WHERE id > ?` on an index
+stays fast at page 10,000 where `OFFSET 100000` does not.
+
 ## Worth trying
 
 1. Add a new field to `create` in `src/server/trpc/routers/todo.ts` (say
@@ -178,3 +275,38 @@ Browser
 9. Try assigning the same task twice → `TASK_ALREADY_ASSIGNED`. Check the
    network tab: HTTP **200**, with `errors` in the body. In GraphQL, "did the
    request succeed" and "did the operation succeed" are different questions.
+
+### Team & Activity side
+
+10. Open the app in two browser windows, select the same task in both, and post
+    a comment in one. It appears in the other with no refetch and no reload —
+    and the Network tab shows no new request, because the data arrived down the
+    socket that was already open.
+11. Run these two in the Apollo Sandbox and compare the server terminal:
+
+    ```
+    { tasksConnection(first: 10) { edges { node { comments { id } } } } }
+    { tasksConnection(first: 10) { edges { node { commentsNaive { id } } } } }
+    ```
+
+    Same result, one query versus N. Then set Prisma's log to `["query"]` and
+    look at the SQL: `WHERE taskId IN (?,?,?,?)` against four separate SELECTs.
+12. Delete `resolve: (payload) => payload` from `Subscription.commentAdded` in
+    `team/resolvers.ts`. The event still fires — you can see it arrive — but the
+    payload comes back as `Cannot return null for non-nullable field`. The
+    default resolver looks for `payload.commentAdded`, and our payload is the
+    comment itself. This one is worth breaking on purpose; it is the most
+    confusing five minutes in a first subscription.
+13. Move `createLoaders(...)` out of `createGraphQLContext()` and into a
+    module-level constant. Everything still works — until you add a comment and
+    reload, and the loader serves you its cached copy of the thread from before
+    the write. A request-scoped cache that escapes its request is a data bug
+    that looks like a caching feature.
+14. Remove `"teamId"` from the `keyArgs` in the `relayStylePagination` policy in
+    `client.ts`, then switch teams and click Load more. One team's tasks get
+    appended onto another's, because the cache now believes both filters address
+    the same list.
+15. Kill the server and watch the browser console: `graphql-ws` retries the
+    connection. Restart it and the subscription reattaches — but comments posted
+    while it was down never arrive. A subscription is a live feed, not a durable
+    queue; if gaps matter, refetch on reconnect.

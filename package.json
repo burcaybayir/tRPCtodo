@@ -3,30 +3,36 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "cross-env NODE_ENV=development tsx server.ts",
     "build": "next build",
-    "start": "next start",
+    "start": "cross-env NODE_ENV=production tsx server.ts",
     "lint": "next lint",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
     "postinstall": "prisma generate",
-    "codegen": "graphql-codegen --config codegen.ts"
+    "codegen": "graphql-codegen --config codegen.ts",
+    "dev:no-ws": "next dev"
   },
   "dependencies": {
     "@apollo/client": "^4.2.9",
     "@apollo/server": "^5.5.1",
     "@as-integrations/next": "^4.1.0",
+    "@graphql-tools/schema": "^10.0.38",
     "@prisma/client": "^6.2.1",
     "@tanstack/react-query": "^5.62.11",
     "@trpc/client": "^11.0.0",
     "@trpc/react-query": "^11.0.0",
     "@trpc/server": "^11.0.0",
+    "dataloader": "^2.2.3",
     "graphql": "^16.14.2",
+    "graphql-subscriptions": "^3.0.0",
+    "graphql-ws": "^6.2.1",
     "next": "^15.1.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "rxjs": "^7.8.2",
     "superjson": "^2.2.2",
+    "ws": "^8.21.3",
     "zod": "^3.24.1"
   },
   "devDependencies": {
@@ -36,10 +42,13 @@
     "@types/node": "^22.10.5",
     "@types/react": "^19.0.4",
     "@types/react-dom": "^19.0.2",
+    "@types/ws": "^8.18.1",
     "autoprefixer": "^10.4.20",
+    "cross-env": "^10.1.0",
     "postcss": "^8.4.49",
     "prisma": "^6.2.1",
     "tailwindcss": "^3.4.17",
+    "tsx": "^4.23.12",
     "typescript": "^5.7.3"
   }
 }

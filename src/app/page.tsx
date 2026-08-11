@@ -7,8 +7,10 @@
  * page is to put a tRPC feature and a GraphQL feature side by side, and a
  * router would add moving parts that teach nothing about either.
  *
- *   Todos           → tRPC     → /api/trpc    → React Query cache
- *   Task Assignment → GraphQL  → /api/graphql → Apollo InMemoryCache
+ *   Todos           → tRPC     → /api/trpc       → React Query cache
+ *   Task Assignment → GraphQL  → /api/graphql    → Apollo InMemoryCache
+ *   Team & Activity → GraphQL  → /api/graphql    → Apollo InMemoryCache
+ *                              + /api/graphql/ws → live comments over WebSocket
  *
  * Both hit the same SQLite file through the same Prisma client. Everything
  * above the database is separate.
@@ -21,10 +23,12 @@
 import { useState } from "react";
 import { TodosTab } from "~/app/_components/TodosTab";
 import { TaskAssignmentTab } from "~/app/_components/TaskAssignmentTab";
+import { TeamActivityTab } from "~/app/_components/TeamActivityTab";
 
 const TABS = [
   { id: "todos", label: "Todos", api: "tRPC" },
   { id: "tasks", label: "Task Assignment", api: "GraphQL" },
+  { id: "team", label: "Team & Activity", api: "GraphQL + WS" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -37,7 +41,7 @@ export default function HomePage() {
       <header>
         <h1 className="text-2xl font-bold">tRPC + GraphQL playground</h1>
         <p className="text-sm text-slate-500">
-          One Next.js app, one database, two API layers side by side
+          One Next.js app, one database, three API surfaces side by side
         </p>
       </header>
 
@@ -64,7 +68,9 @@ export default function HomePage() {
         ))}
       </div>
 
-      {activeTab === "todos" ? <TodosTab /> : <TaskAssignmentTab />}
+      {activeTab === "todos" && <TodosTab />}
+      {activeTab === "tasks" && <TaskAssignmentTab />}
+      {activeTab === "team" && <TeamActivityTab />}
     </main>
   );
 }
