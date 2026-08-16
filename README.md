@@ -1,12 +1,13 @@
 # tRPC + GraphQL — a learning project
 
-One Next.js app, one database, **three independent API surfaces** side by side:
+One Next.js app, one database, **four independent API surfaces** side by side:
 
 | Tab | API | Endpoint | Client | Cache |
 |---|---|---|---|---|
 | **Todos** | tRPC | `/api/trpc` | `@trpc/react-query` | React Query |
 | **Task Assignment** | GraphQL | `/api/graphql` | Apollo Client | Apollo `InMemoryCache` |
 | **Team & Activity** | GraphQL + WebSocket | `/api/graphql` and `/api/graphql/ws` | Apollo Client | Apollo `InMemoryCache` |
+| **AI Assistant** | Claude tool use | `/api/agent/chat` | plain `fetch` | server-side, in memory |
 
 All three write to the same SQLite file through the same Prisma client.
 Everything above the database is separate — the Todos tab never touches Apollo,
@@ -16,6 +17,10 @@ in different protocols and see the differences next to each other.
 The third tab exists to exercise the parts of GraphQL the second one had no
 reason to use: **nested queries** at two depths against one field, **DataLoader**
 batching, **cursor pagination**, and **subscriptions** over WebSocket.
+
+The fourth tab is a **tool-calling agent**: it turns the mutations the other tabs
+expose into tools Claude can call, decides for itself which to call and in what
+order, and stops for human approval before any of them writes to the database.
 
 ## Setup
 
@@ -39,6 +44,11 @@ server to install — SQLite is a single file.
 > If you change the schema yourself, create a new migration with
 > `npx prisma migrate dev --name <name>`. `prisma db push` also works, but it
 > keeps no migration history.
+
+Set `ANTHROPIC_API_KEY` in `.env` — **only needed for the AI Assistant tab**; the
+other three work without it. Get a key from
+[console.anthropic.com](https://console.anthropic.com/settings/keys). `.env` is
+gitignored, so the key never reaches the repository.
 
 ```bash
 npm run codegen
@@ -228,6 +238,53 @@ rather than the file**.
 | `src/lib/apollo/voiceOperations.ts` | The voice documents |
 | `src/app/_components/team/VoiceMessagePanel.tsx` | Recorder, file upload, `<audio>` player, Remove |
 
+### AI Assistant (tool-calling agent)
+
+| File | What it does |
+|---|---|
+| `src/server/agent/tools.ts` | Six tools, each a thin adapter that calls an existing resolver function directly |
+| `src/server/agent/loop.ts` | **The agent loop**, the confirmation state machine, and the long notes on what "agentic" means and why human-in-the-loop matters |
+| `src/app/api/agent/chat/route.ts` | The one endpoint; explains why the conversation lives server-side |
+| `src/app/_components/AiAssistantTab.tsx` | Chat UI with proposed-action cards |
+
+**The loop, in full:**
+
+```
+user message
+     ↓
+┌──► call Claude with the conversation + tool definitions
+│         ↓
+│    stop_reason == "tool_use"?
+│         ├── no  → final text answer, exit
+│         └── yes → for each requested tool:
+│                     read-only  → run it now
+│                     mutating   → STOP, ask the user
+│                        ↓
+└──────────── append all results as one user message
+```
+
+The exit condition is `stop_reason`, not a step counter — the code cannot know
+in advance how many times this goes around. That is the difference between an
+agent and a single-shot call: **the model chooses the actions and their order**,
+and reacts to each result before deciding the next.
+
+**Tools are the app's own mutations.** `createTask`, `assignTaskToUser`,
+`addCommentToTask` and `attachVoiceMessage` call the same GraphQL resolver
+functions the UI calls — imported and invoked directly, not over HTTP. A GraphQL
+resolver is just `(parent, args, context, info) => result`, so there is no reason
+to make a network round trip to reach one in the same process. Business rules
+(the 1-1 assignment invariant, empty-comment rejection, voice-message upsert) are
+therefore never duplicated: the agent gets them because it runs the same code.
+
+**Human-in-the-loop.** Read-only tools (`listUsers`, `listTasks`) run
+unattended — asking permission to look something up would train you to click
+Confirm without reading. Every write stops the loop, returns the literal call it
+wants to make, and waits. **The gate is enforced on the server**: the browser can
+only send "confirm" or "cancel" for a given tool-use id, and the conversation
+history it would need in order to forge an approval never leaves the server.
+Declining sends the model an error-flagged tool result saying so — not silence,
+which would leave it reporting work that never happened.
+
 **The audio never travels over GraphQL.** GraphQL carries JSON, so a file would
 have to be base64 (a third larger, buffered whole on both ends) or use the
 multipart spec (another layer for every client and server in the chain). Instead
@@ -369,3 +426,22 @@ stays fast at page 10,000 where `OFFSET 100000` does not.
 18. Upload something that is not audio (`curl -F "file=@package.json;type=application/json"`)
     → `Unsupported audio type`. The stored filename is generated too, never
     taken from the client: a client-supplied name is a client-supplied path.
+
+### AI Assistant
+
+19. Ask for something multi-step — *"create a bug task for the login redirect and
+    assign it to Ada"*. Watch the transcript: a `listUsers` lookup runs on its
+    own, then two separate approvals appear. Nothing in the code says to look up
+    users first; the model worked that out from the tool descriptions.
+20. Click **Cancel** on a proposal, then read what the model says next. It gets a
+    tool result marked `is_error` telling it you declined, so it acknowledges
+    rather than reporting success or silently retrying.
+21. Set `mutates: false` on `createTask` in `agent/tools.ts` and re-run. The
+    approval disappears and the task is created the instant the model asks for
+    it — one boolean is the entire difference between a supervised agent and an
+    autonomous one.
+22. Ask for something the schema cannot do — *"make this task high priority"*.
+    There is no priority field and no tool for one, so the model says so instead
+    of inventing a way. An agent is bounded by its tools, not by its prose.
+23. Delete `ANTHROPIC_API_KEY` from `.env` and send a message: a clear error in
+    the chat, and the other three tabs keep working.

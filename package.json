@@ -14,6 +14,7 @@
     "dev:no-ws": "next dev"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.117.1",
     "@apollo/client": "^4.2.9",
     "@apollo/server": "^5.5.1",
     "@as-integrations/next": "^4.1.0",

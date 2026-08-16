@@ -24,11 +24,13 @@ import { useState } from "react";
 import { TodosTab } from "~/app/_components/TodosTab";
 import { TaskAssignmentTab } from "~/app/_components/TaskAssignmentTab";
 import { TeamActivityTab } from "~/app/_components/TeamActivityTab";
+import { AiAssistantTab } from "~/app/_components/AiAssistantTab";
 
 const TABS = [
   { id: "todos", label: "Todos", api: "tRPC" },
   { id: "tasks", label: "Task Assignment", api: "GraphQL" },
   { id: "team", label: "Team & Activity", api: "GraphQL + WS" },
+  { id: "ai", label: "AI Assistant", api: "Claude" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -71,6 +73,7 @@ export default function HomePage() {
       {activeTab === "todos" && <TodosTab />}
       {activeTab === "tasks" && <TaskAssignmentTab />}
       {activeTab === "team" && <TeamActivityTab />}
+      {activeTab === "ai" && <AiAssistantTab />}
     </main>
   );
 }
