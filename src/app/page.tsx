@@ -11,6 +11,7 @@
  *   Task Assignment → GraphQL  → /api/graphql    → Apollo InMemoryCache
  *   Team & Activity → GraphQL  → /api/graphql    → Apollo InMemoryCache
  *                              + /api/graphql/ws → live comments over WebSocket
+ *   AI Assistant    → Claude   → /api/agent/chat → server-held conversation
  *
  * Both hit the same SQLite file through the same Prisma client. Everything
  * above the database is separate.
@@ -43,7 +44,7 @@ export default function HomePage() {
       <header>
         <h1 className="text-2xl font-bold">tRPC + GraphQL playground</h1>
         <p className="text-sm text-slate-500">
-          One Next.js app, one database, three API surfaces side by side
+          One Next.js app, one database, four API surfaces side by side
         </p>
       </header>
 

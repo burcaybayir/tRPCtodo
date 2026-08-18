@@ -185,6 +185,24 @@ const conversations =
   globalForAgent.conversations ?? new Map<string, Conversation>();
 globalForAgent.conversations = conversations;
 
+/**
+ * Turns an SDK error into something worth showing a person.
+ *
+ * `APIError.message` is the raw wire body — `400 {"type":"error","error":{...}}` —
+ * which is exactly what you want in a log and exactly what you do not want in a
+ * chat bubble. The parsed body carries a plain sentence ("Your credit balance is
+ * too low..."), so we surface that and keep the status code for context.
+ */
+function describeApiError(error: unknown): string {
+  if (error instanceof Anthropic.APIError) {
+    const body = error.error as { error?: { message?: string } } | undefined;
+    const detail = body?.error?.message;
+    if (detail) return `Anthropic API (${error.status}): ${detail}`;
+  }
+
+  return error instanceof Error ? error.message : "The model request failed";
+}
+
 function getClient() {
   if (!process.env.ANTHROPIC_API_KEY) {
     throw new Error(
@@ -218,23 +236,10 @@ function pendingResponse(conv: Conversation): AgentResponse {
   };
 }
 
-/**
- * ───────────────────────────────────────────────────────────────────────────
- * THE LOOP ITSELF
- * ───────────────────────────────────────────────────────────────────────────
- *
- * Runs until the model stops requesting tools, or until it requests a write
- * and we park to ask the user.
- */
-async function runLoop(conv: Conversation): Promise<AgentResponse> {
-  const client = getClient();
-
-  for (let turn = 0; turn < MAX_TURNS; turn++) {
-    // ── STEP 1: call the model with the whole conversation so far ──────────
-    //
-    // The API is stateless: every turn resends the full history. The model has
-    // no memory of the previous call beyond what is in `messages`.
-    const response = await client.beta.messages.create({
+/** One model call, with SDK errors translated into readable text. */
+async function createMessage(client: Anthropic, conv: Conversation) {
+  try {
+    return await client.beta.messages.create({
       model: MODEL,
       max_tokens: MAX_TOKENS,
       system: SYSTEM_PROMPT,
@@ -252,6 +257,29 @@ async function runLoop(conv: Conversation): Promise<AgentResponse> {
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
     });
+  } catch (error) {
+    console.error("[agent] model call failed:", error);
+    throw new Error(describeApiError(error));
+  }
+}
+
+/**
+ * ───────────────────────────────────────────────────────────────────────────
+ * THE LOOP ITSELF
+ * ───────────────────────────────────────────────────────────────────────────
+ *
+ * Runs until the model stops requesting tools, or until it requests a write
+ * and we park to ask the user.
+ */
+async function runLoop(conv: Conversation): Promise<AgentResponse> {
+  const client = getClient();
+
+  for (let turn = 0; turn < MAX_TURNS; turn++) {
+    // ── STEP 1: call the model with the whole conversation so far ──────────
+    //
+    // The API is stateless: every turn resends the full history. The model has
+    // no memory of the previous call beyond what is in `messages`.
+    const response = await createMessage(client, conv);
 
     /**
      * Check stop_reason BEFORE reading content. A refusal returns HTTP 200
