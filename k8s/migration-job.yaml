@@ -1,0 +1,87 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Database migration — a one-off Job
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# WHY THIS IS NOT PART OF THE APP'S STARTUP COMMAND
+#
+# The tempting version is `prisma migrate deploy && npm start` as the container
+# command. It is one less object and it is wrong for four separate reasons:
+#
+#   IT RUNS N TIMES. The Deployment has 2 replicas and an HPA that can take it
+#   to 10. Every pod would run migrations on boot — concurrently, against one
+#   database, racing each other. Prisma takes an advisory lock so they mostly
+#   serialise rather than corrupt, but the losers sit waiting on the lock while
+#   Kubernetes is timing their startup probes.
+#
+#   IT RUNS ON EVERY RESTART. A pod evicted at 3am re-runs migrations before it
+#   can serve traffic. Nothing to apply is the common case and it is fast, but
+#   it is a schema change attempted at the worst possible moment.
+#
+#   FAILURE IS UNDIAGNOSABLE. A failed migration becomes CrashLoopBackOff on
+#   the app, and the actual SQL error is buried in the logs of a container that
+#   keeps being replaced. As a Job it is one object with one clear status and
+#   logs that stay put.
+#
+#   YOU CANNOT SEQUENCE A ROLLOUT. Real deploys sometimes need the schema
+#   change to land before the new code, or after it. If migration is welded to
+#   app startup you have no way to express that ordering.
+#
+# So: one Job, run once per release, before the app rollout.
+#
+# WHY THE SAME IMAGE AS THE APP
+#
+# Because then the migrations are guaranteed to be the ones that shipped with
+# this code. A separate migration image can drift; `image:` pinned to the same
+# tag cannot. This is why prisma stayed in `dependencies` rather than
+# `devDependencies` — the CLI has to exist in the runtime image.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # Give each release its own Job name — `trpctodo-migrate-v3` and so on.
+  # A Job's `spec` is immutable, so re-applying this file after a change fails
+  # with "field is immutable" unless the old Job is deleted first. Naming them
+  # per-release sidesteps that and leaves an audit trail of what ran when.
+  name: trpctodo-migrate
+  namespace: trpctodo
+spec:
+  # Retry a failed pod up to 3 times. Migrations are not idempotent in general,
+  # but `prisma migrate deploy` is: it consults the _prisma_migrations table and
+  # applies only what is missing, so a retry after a transient connection
+  # failure is safe.
+  backoffLimit: 3
+
+  # Clean the Job (and its pod) up 10 minutes after it finishes. Long enough to
+  # read the logs, short enough that completed Jobs do not accumulate forever.
+  ttlSecondsAfterFinished: 600
+
+  template:
+    spec:
+      # Never restart the pod in place — let the Job controller create a fresh
+      # one. This is required for Jobs; `Always` is rejected.
+      restartPolicy: Never
+
+      containers:
+        - name: migrate
+          image: REGISTRY/trpctodo:TAG
+          command: ["npx", "prisma", "migrate", "deploy"]
+
+          # `migrate deploy` is the production command: it applies pending
+          # migrations and nothing else. Do NOT use `migrate dev` here — it is
+          # interactive, it will generate new migration files, and if it detects
+          # drift it offers to RESET THE DATABASE. In a cluster that prompt has
+          # nobody to answer it.
+
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: trpctodo-secrets
+                  key: DATABASE_URL
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi

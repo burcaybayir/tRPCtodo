@@ -1,0 +1,188 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# PostgreSQL — StatefulSet + headless Service
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# WHY A STATEFULSET AND NOT A DEPLOYMENT
+#
+# A Deployment treats its pods as interchangeable. That is precisely right for
+# the app tier — any pod can serve any request, so the controller is free to
+# create them in any order, name them randomly, and replace one with another.
+#
+# A database is the opposite: its pod IS its data. Three differences matter.
+#
+#   STABLE IDENTITY. StatefulSet pods are named by ordinal — postgres-0,
+#   postgres-1 — and a replacement pod gets the same name back. A Deployment
+#   would produce postgres-7d4f9c-x2k1p today and something else tomorrow, so
+#   nothing could depend on the name.
+#
+#   STABLE STORAGE. Each pod keeps its own PersistentVolumeClaim, and the claim
+#   is re-bound to the pod with the same ordinal on restart. postgres-0 always
+#   gets postgres-0's disk. A Deployment with a single shared PVC breaks the
+#   moment you scale past one replica — two Postgres processes writing one data
+#   directory corrupt it — and RollingUpdate would happily try exactly that.
+#
+#   ORDERED LIFECYCLE. StatefulSets start and stop pods one at a time, in
+#   order. For a replicated database that is how you avoid losing quorum.
+#
+# The honest caveat: this manifest runs ONE Postgres pod, and that is a single
+# point of failure with a restart window measured in tens of seconds. It is the
+# right shape for learning and for a staging cluster. For anything real, use a
+# managed database — on GKE that is Cloud SQL, reached via the Cloud SQL Auth
+# Proxy sidecar or a Private IP. Running a highly-available Postgres yourself
+# means replication, failover, backups and PITR, which is an operator's job
+# (CloudNativePG, Zalando) and not a hand-written manifest's.
+
+---
+# The headless Service. `clusterIP: None` is what makes it headless: it gets no
+# virtual IP and does no load balancing. Instead, DNS returns the pod IPs
+# directly, and each pod additionally gets a stable per-pod name:
+#
+#     postgres-0.postgres.trpctodo.svc.cluster.local
+#
+# That per-pod DNS is the point. A normal ClusterIP Service would hand out a
+# single VIP that round-robins across pods — useless when a client must reach
+# one specific replica (the primary, say).
+#
+# With a single pod, `postgres:5432` resolves to it, which is what DATABASE_URL
+# in secret.yaml uses.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: trpctodo
+  labels:
+    app.kubernetes.io/name: postgres
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: trpctodo
+spec:
+  # Binds this StatefulSet to the headless Service above. This field is what
+  # creates the per-pod DNS names; without it the pods are addressable only by
+  # IP, which changes on every restart.
+  serviceName: postgres
+
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+    spec:
+      # The postgres image expects to run as uid 999 and needs the data
+      # directory to be writable by it. fsGroup makes the kubelet chown the
+      # mounted volume to that group on attach — without it the container
+      # exits immediately with a permissions error on initdb.
+      securityContext:
+        fsGroup: 999
+        runAsUser: 999
+        runAsGroup: 999
+
+      containers:
+        - name: postgres
+          # Pinned to a minor version on purpose. `postgres:16` would silently
+          # move to a new minor on every pull, and a database is the last place
+          # you want an unplanned upgrade. Note that Postgres MAJOR upgrades
+          # need a data migration — changing 16 to 17 here will not work.
+          image: postgres:16.4-alpine
+
+          ports:
+            - name: postgres
+              containerPort: 5432
+
+          env:
+            - name: POSTGRES_USER
+              value: trpctodo
+            - name: POSTGRES_DB
+              value: trpctodo
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: trpctodo-secrets
+                  key: POSTGRES_PASSWORD
+
+            # The official image initialises the cluster in $PGDATA. Pointing
+            # it at a SUBDIRECTORY of the mount, not the mount root, is
+            # deliberate: many volume types put a `lost+found` directory at the
+            # root, and initdb refuses to run in a non-empty directory.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+
+          # `pg_isready` answers the question that matters — is the server
+          # accepting connections — rather than just "is the process alive".
+          # Postgres runs recovery on an unclean restart and refuses
+          # connections while it does, so a process check would report ready
+          # too early and the app would crash-loop against it.
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "trpctodo", "-d", "trpctodo"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "trpctodo", "-d", "trpctodo"]
+            # Generous, on purpose. Restarting a database because it was slow
+            # to answer usually makes things worse: recovery on the next start
+            # takes longer than whatever the pause was.
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              # No CPU limit — see the note in app-deployment.yaml. Throttling a
+              # database under load turns a slow query into a pile-up.
+              memory: 1Gi
+
+  # volumeClaimTemplates, not a standalone PVC.
+  #
+  # This is the mechanism that ties storage to identity: the StatefulSet mints
+  # one PVC per pod, named data-postgres-0, and re-binds that same claim to
+  # postgres-0 whenever it is rescheduled — on a different node, after an
+  # eviction, whenever. A hand-written PVC referenced by the pod template would
+  # be shared by every replica, which is safe at replicas: 1 and silently
+  # corrupting above it.
+  #
+  # Deliberate sharp edge worth knowing: deleting the StatefulSet does NOT
+  # delete these PVCs. That is a safety feature — it means `kubectl delete
+  # statefulset postgres` cannot destroy your data by accident — and it means
+  # you must remove them by hand to actually start clean.
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        # ReadWriteOnce = mountable read-write by one node. Correct here, since
+        # exactly one pod ever writes this volume. It is also the only mode GCE
+        # Persistent Disks support in this configuration.
+        resources:
+          requests:
+            storage: 10Gi
+        # On GKE, omitting storageClassName uses the cluster default
+        # (`standard-rwo`, a balanced Persistent Disk). Name it explicitly if
+        # you want `premium-rwo` for SSD — a database is usually worth it.
+        # storageClassName: premium-rwo

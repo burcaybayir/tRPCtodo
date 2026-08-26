@@ -1,0 +1,98 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# HorizontalPodAutoscaler — more pods under load, fewer when idle
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# HOW IT INTERACTS WITH THE RESOURCE REQUESTS
+#
+# This is the part people get wrong, so it is worth being precise:
+#
+#   averageUtilization IS A PERCENTAGE OF THE CPU **REQUEST**, NOT OF A CORE
+#   AND NOT OF THE LIMIT.
+#
+# app-deployment.yaml requests `cpu: 200m`. With a 70% target, the HPA aims to
+# keep average usage at 140m per pod, and computes:
+#
+#     desiredReplicas = ceil( currentReplicas × currentUsage / targetUsage )
+#
+# So 2 pods averaging 280m → ceil(2 × 280/140) = 4 pods.
+#
+# Two consequences follow directly:
+#
+#   THE REQUEST IS THE AUTOSCALER'S UNIT. Change `requests.cpu` and you have
+#   silently changed what every HPA percentage means. Halve the request and the
+#   same real load reads as double the utilisation, so the HPA scales out twice
+#   as eagerly — with no edit to this file.
+#
+#   A MISSING CPU REQUEST DISABLES THE HPA ENTIRELY. With nothing to take a
+#   percentage of, utilisation is undefined; the HPA reports
+#   `<unknown>/70%` and never scales. If an HPA appears to do nothing, check
+#   for a CPU request on the pod spec first.
+#
+# (The absent CPU *limit* is fine here. Limits cap a pod's ceiling; the HPA
+# never looks at them.)
+#
+# WHY 70% AND NOT 90%
+#
+# The target is not "how busy pods should be", it is "how busy pods are when we
+# decide we need more" — and new pods are not instant. Image pull, process
+# start, and the readiness probe passing all take time, during which the
+# existing pods absorb the whole increase. 70% leaves headroom to survive that
+# gap; 90% means the fleet is saturated before the replacement is serving.
+#
+# Requires metrics-server, which GKE installs by default. `kubectl top pods`
+# working is the quick check that it is present.
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: trpctodo-app
+  namespace: trpctodo
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: trpctodo-app
+
+  # Never below 2: one pod means a rollout or a node failure is an outage.
+  minReplicas: 2
+  # A guard rail, not a goal. It caps the blast radius if something pathological
+  # (a hot loop, a retry storm) pins CPU — without it an HPA can scale until it
+  # exhausts the cluster or the bill.
+  maxReplicas: 10
+
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+
+    # Memory-based autoscaling is available and usually a trap for a Node.js
+    # app: V8 grows the heap toward its ceiling and does not hand memory back
+    # promptly, so utilisation stays high after the load has gone and the HPA
+    # never scales down.
+    #
+    # For a request-driven app the honest signal is requests-per-second or
+    # queue depth, via `type: Pods` / `type: External` and a custom metrics
+    # adapter. CPU is the pragmatic proxy and the right place to start.
+
+  behavior:
+    scaleUp:
+      # React quickly to load, but not to a single spike: the HPA looks at the
+      # highest recommendation over this window before acting.
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 100 # at most double the fleet…
+          periodSeconds: 60 # …per minute
+    scaleDown:
+      # Deliberately slow — five minutes. Scaling in is not urgent, and doing it
+      # eagerly causes flapping: the removed capacity pushes utilisation back
+      # over the target, which scales out again. Every removal also kills any
+      # WebSocket the pod was holding, so each one is user-visible here.
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1 # retire one pod at a time
+          periodSeconds: 120

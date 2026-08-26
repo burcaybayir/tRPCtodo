@@ -1,0 +1,40 @@
+# Local development only — Kubernetes does not read this file.
+#
+# The app now needs a real PostgreSQL server, so `npm run dev` alone is no
+# longer enough. This starts one that matches the DATABASE_URL in .env.
+#
+#   docker compose up -d db      # start Postgres
+#   npx prisma migrate deploy    # create the tables
+#   npm run dev                  # run the app against it
+#
+# The k8s/ manifests provision Postgres separately (a StatefulSet with a
+# persistent volume). This file is the local stand-in for that, nothing more.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: trpctodo
+      POSTGRES_PASSWORD: trpctodo
+      POSTGRES_DB: trpctodo
+    ports:
+      # Published to the host so `npm run dev` (running outside Docker) can
+      # reach it at localhost:5432, which is what .env expects.
+      - "5432:5432"
+    volumes:
+      # A named volume, so data survives `docker compose down`. Use
+      # `docker compose down -v` to wipe it and start clean.
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # `docker compose up -d db` returns as soon as the container starts, not
+      # when Postgres is ready to accept connections. Running migrations in that
+      # gap fails with "the database system is starting up" — wait for this
+      # check to report healthy first.
+      test: ["CMD-SHELL", "pg_isready -U trpctodo -d trpctodo"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  postgres-data:

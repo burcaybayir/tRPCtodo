@@ -1,0 +1,34 @@
+# Everything here is excluded from the build context — the tarball Docker sends
+# to the daemon before the first instruction runs. Two reasons it matters:
+#
+#   speed — node_modules and .next are hundreds of megabytes; shipping them only
+#           to overwrite them with `npm ci` and `next build` wastes the whole
+#           transfer on every build.
+#
+#   safety — .env holds a real database password and a real API key. Without
+#            this file, `COPY . .` in the build stage bakes them into an image
+#            layer. Deleting the file in a later instruction does NOT remove it:
+#            layers are immutable and anyone with the image can read it back.
+#            Secrets reach the container from Kubernetes at runtime, never from
+#            the image.
+
+node_modules
+.next
+.git
+.gitignore
+
+.env
+.env.*
+
+# Local Postgres data and uploaded audio: runtime state, not build input.
+public/uploads
+postgres-data
+
+Dockerfile
+.dockerignore
+docker-compose.yml
+k8s
+README.md
+
+npm-debug.log*
+*.tsbuildinfo

@@ -1,0 +1,149 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Ingress — the door from the internet into the cluster
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# An Ingress object is only a routing *rule*. Something has to implement it: an
+# Ingress controller watches these objects and configures real infrastructure.
+# On GKE, `kubernetes.io/ingress.class: gce` selects the built-in controller,
+# which provisions a Google Cloud HTTP(S) Load Balancer — an external, Google-
+# managed L7 proxy. Apply this to a cluster with no controller and nothing
+# happens at all: the object is created, ADDRESS stays empty forever.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# ⚠️  WEBSOCKETS THROUGH THE INGRESS — what actually matters
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# GraphQL subscriptions ride a WebSocket at /api/graphql/ws. Two facts decide
+# whether that survives the trip through the load balancer:
+#
+# 1. UPGRADE HEADERS: nothing to do on GKE.
+#
+#    A WebSocket starts as an HTTP/1.1 GET carrying `Upgrade: websocket` and
+#    `Connection: Upgrade`. The GCE load balancer supports the upgrade natively
+#    and forwards those headers — there is no annotation to enable it and
+#    nothing to configure.
+#
+#    This is where NGINX-Ingress advice on the internet misleads. There you
+#    would reach for `nginx.org/websocket-services` or a proxy_set_header
+#    snippet. Those annotations are inert on GKE; copying them in produces a
+#    manifest that looks configured and changes nothing.
+#
+# 2. TIMEOUTS: this is the one that bites.
+#
+#    The GCE backend service has a default response timeout of 30 seconds, and
+#    for a WebSocket that timer applies to the WHOLE CONNECTION, not to an idle
+#    period. A subscription that sits quietly waiting for a comment — exactly
+#    what this app does — is dropped after 30s no matter how healthy it is.
+#
+#    The symptom is distinctive and easy to misdiagnose: subscriptions work,
+#    then stop after half a minute, then come back, because graphql-ws
+#    reconnects (`retryAttempts: 5` in src/lib/apollo/client.ts). It reads like
+#    a flaky network. It is a timeout.
+#
+#    The fix is the BackendConfig below, raising `timeoutSec`. It is a GKE CRD,
+#    attached to the Service via the `cloud.google.com/backend-config`
+#    annotation in app-service.yaml.
+#
+# 3. Also worth knowing: the GCE load balancer speaks HTTP/1.1 to backends for
+#    upgraded connections. WebSockets do not work over HTTP/2 to the backend, so
+#    do not set the `cloud.google.com/app-protocol` annotation to HTTP/2 on a
+#    Service that carries them.
+
+---
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: trpctodo-backendconfig
+  namespace: trpctodo
+spec:
+  # 3600s = 1 hour. This is the maximum lifetime of any single connection
+  # through the load balancer, WebSockets included. graphql-ws reconnects
+  # transparently when it is reached, so an hour is a reasonable ceiling —
+  # raise it if you want fewer reconnects, but do not remove the bound.
+  timeoutSec: 3600
+
+  # Point the load balancer's own health checks at the app's health endpoint.
+  # Without this it probes `/`, which happens to work here but breaks the moment
+  # the root path needs auth or redirects. These checks are separate from the
+  # kubelet's probes in app-deployment.yaml: the kubelet decides whether the pod
+  # lives, this decides whether the Google load balancer sends it traffic.
+  healthCheck:
+    type: HTTP
+    requestPath: /api/health
+    port: 3000
+    checkIntervalSec: 10
+    timeoutSec: 5
+    healthyThreshold: 1
+    unhealthyThreshold: 3
+
+  # Bleed connections gracefully on scale-down instead of severing them.
+  connectionDraining:
+    drainingTimeoutSec: 60
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: trpctodo
+  namespace: trpctodo
+  annotations:
+    # `gce` = external HTTP(S) Load Balancer. Use `gce-internal` for an
+    # internal-only one.
+    kubernetes.io/ingress.class: "gce"
+
+    # A static external IP, reserved beforehand with:
+    #   gcloud compute addresses create trpctodo-ip --global
+    # Without this the load balancer gets an ephemeral IP that changes if the
+    # Ingress is ever recreated — which then breaks the DNS record pointing at
+    # it. Reserve it first, or delete this line for a throwaway cluster.
+    kubernetes.io/ingress.global-static-ip-name: "trpctodo-ip"
+
+    # Google-managed TLS certificate, defined below. Uncomment together with the
+    # ManagedCertificate block and the `tls:` section once DNS points at the IP
+    # — issuance FAILS until the domain resolves to the load balancer, and it
+    # can take 15-60 minutes after that.
+    # networking.gke.io/managed-certificates: "trpctodo-cert"
+
+    # Redirect plain HTTP to HTTPS once TLS is live.
+    # kubernetes.io/ingress.allow-http: "false"
+spec:
+  rules:
+    - host: trpctodo.example.com # ← your domain
+      http:
+        paths:
+          # A single catch-all. Everything — the pages, /api/trpc, /api/graphql,
+          # the /api/graphql/ws WebSocket, /api/agent/chat — is served by the
+          # same process on the same port, so there is nothing to split.
+          #
+          # A separate path rule for the WebSocket would buy nothing here: it
+          # would point at the same Service and the same port. Rules like that
+          # are for splitting traffic across DIFFERENT backends.
+          - path: /
+            # `Prefix` matches by path segment. `ImplementationSpecific` is the
+            # GCE default and behaves differently from other controllers — being
+            # explicit keeps the manifest portable.
+            pathType: Prefix
+            backend:
+              service:
+                name: trpctodo-app
+                port:
+                  # By name, matching the `name: http` port in app-service.yaml.
+                  name: http
+
+  # tls:
+  #   - hosts:
+  #       - trpctodo.example.com
+  #     secretName: trpctodo-tls   # only for a self-managed cert
+
+# ---
+# Google-managed certificate — free, auto-renewing. Uncomment along with the
+# annotation above once DNS resolves to the reserved static IP.
+#
+# apiVersion: networking.gke.io/v1
+# kind: ManagedCertificate
+# metadata:
+#   name: trpctodo-cert
+#   namespace: trpctodo
+# spec:
+#   domains:
+#     - trpctodo.example.com

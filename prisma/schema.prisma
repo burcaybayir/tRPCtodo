@@ -6,8 +6,22 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// PostgreSQL, not SQLite.
+//
+// SQLite is a file on local disk. That is perfect for a single-process
+// learning app and impossible in Kubernetes, for two independent reasons:
+//
+//   1. Pod filesystems are ephemeral. A pod restart — a deploy, an eviction,
+//      a node drain, an OOM kill — discards the file and every row in it.
+//   2. Replicas do not share a filesystem. With two app pods, each would open
+//      its own copy of the file and they would silently disagree about the
+//      state of the world.
+//
+// A network database solves both: one authoritative store, reachable by every
+// pod over DNS, with its own lifecycle and its own persistent volume. That is
+// what k8s/postgres-statefulset.yaml provisions.
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 

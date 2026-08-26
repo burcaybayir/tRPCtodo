@@ -1,0 +1,196 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# The Next.js app
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# A Deployment (not a StatefulSet) because these pods ARE interchangeable: no
+# pod owns any data, so any of them can serve any request and the controller is
+# free to replace one with another at will.
+#
+# ⚠️  READ THIS BEFORE RUNNING MORE THAN ONE REPLICA
+#
+# Three features of this app hold state in a single process's memory. They work
+# perfectly at replicas: 1 and break in ways that look like flakiness above it:
+#
+#   GraphQL subscriptions. The PubSub in src/server/graphql/team/pubsub.ts is
+#   in-memory. A comment posted through pod A publishes into pod A's memory; a
+#   browser holding its WebSocket to pod B never hears about it. Symptom: live
+#   updates work "sometimes" — specifically, when both requests happen to land
+#   on the same pod. Fix: a shared broker (graphql-redis-subscriptions).
+#
+#   AI Assistant conversations. src/server/agent/loop.ts keeps them in a Map on
+#   globalThis. A follow-up that lands on another pod gets "Unknown
+#   conversation". Fix: move the store to Postgres or Redis.
+#
+#   Uploaded voice messages. src/server/storage.ts writes to public/uploads on
+#   the pod's own filesystem. Written to pod A, requested from pod B → 404; and
+#   gone entirely on restart, because that filesystem is ephemeral. Fix: object
+#   storage (GCS), which is exactly what the file's own comments describe.
+#
+# `sessionAffinity: ClientIP` on the Service is a partial mitigation for the
+# first two — it is a band-aid, not a fix, and it does nothing for the third.
+# Kept at 2 replicas here because the exercise asks for it and because seeing
+# these break is more instructive than hiding them.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpctodo-app
+  namespace: trpctodo
+  labels:
+    app.kubernetes.io/name: trpctodo-app
+spec:
+  # The HPA in hpa.yaml also writes this field. Once the HPA is live it owns the
+  # replica count, and leaving a number here means `kubectl apply` briefly
+  # fights it on every deploy. If you adopt the HPA permanently, delete this
+  # line rather than trying to keep the two in sync.
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trpctodo-app
+
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Never drop below the desired count during a rollout, and add at most one
+      # extra pod. With 2 replicas that means: start a third, wait for it to
+      # pass readiness, then retire an old one. No capacity gap.
+      maxUnavailable: 0
+      maxSurge: 1
+
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: trpctodo-app
+    spec:
+      # Enforce at the pod level what the Dockerfile already does at the image
+      # level. Two independent controls because they are maintained separately:
+      # someone can change the base image without touching this manifest, and
+      # `runAsNonRoot: true` makes the kubelet refuse to start a container whose
+      # image would run as uid 0.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+
+      containers:
+        - name: app
+          # Replace at deploy time — e.g.
+          #   gcr.io/PROJECT/trpctodo:2026-08-12-abc1234
+          #
+          # Use an immutable tag (a git SHA or a build timestamp), never
+          # `:latest`. With `:latest` two pods created a minute apart can be
+          # running different code, and a rollback has nothing to roll back to.
+          image: REGISTRY/trpctodo:TAG
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+              # One port carries both HTTP and the GraphQL WebSocket — server.ts
+              # intercepts the `upgrade` event on /api/graphql/ws. There is no
+              # second port to declare. See the Dockerfile's EXPOSE note.
+
+          # envFrom pulls in every key of each object as an env var. Two sources
+          # so the split stays visible: config is readable, secrets are not.
+          envFrom:
+            - configMapRef:
+                name: trpctodo-config
+            - secretRef:
+                name: trpctodo-secrets
+
+          # ── RESOURCES ────────────────────────────────────────────────────
+          #
+          # REQUESTS are for the scheduler. They are a reservation: the
+          # scheduler will only place this pod on a node with that much
+          # allocatable capacity left, and it subtracts the request from that
+          # node's budget whether or not the pod ever uses it. Requests that are
+          # too low let the scheduler overcommit a node and everything on it
+          # gets slow together; too high and you pay for idle capacity.
+          #
+          # LIMITS are for the kubelet at runtime, and the two resources behave
+          # completely differently at the limit:
+          #
+          #   CPU is compressible. Exceed the limit and the process is
+          #   THROTTLED — it keeps running, just slower. Nothing dies; latency
+          #   climbs, which is far harder to spot.
+          #
+          #   Memory is not compressible. Exceed the limit and the kernel OOM
+          #   kills the container. No warning, no unwind, exit code 137. This is
+          #   why a memory limit is essential: without one, a leaking pod
+          #   consumes the whole node and takes its neighbours down with it.
+          #
+          # NO CPU LIMIT HERE, DELIBERATELY. A CPU limit throttles against a
+          # 100ms quota window, so a bursty Node.js process gets stalled mid-tick
+          # even when the node has idle cores — visibly worse tail latency for no
+          # gain. The CPU *request* already guarantees a floor and gives the pod
+          # a proportional share of the surplus. Memory is limited because the
+          # failure mode there is a dead neighbour, not a slow one.
+          resources:
+            requests:
+              cpu: 200m # 0.2 of a core; also the HPA's baseline — see hpa.yaml
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+
+          # ── PROBES ───────────────────────────────────────────────────────
+          #
+          # Same endpoint, entirely different questions and consequences.
+          #
+          #   LIVENESS: "is this process wedged?" On failure the kubelet KILLS
+          #   and restarts the container. It is a last resort for a hung
+          #   event loop or a deadlock — states a restart genuinely fixes. Set
+          #   it too aggressively and you restart pods that were merely busy,
+          #   which is how a load spike becomes an outage.
+          #
+          #   READINESS: "should this pod receive traffic right now?" On failure
+          #   the pod is removed from the Service's endpoints. Nothing is
+          #   killed; it just stops getting requests until it passes again. This
+          #   is the one doing the real work day to day — it is what keeps
+          #   traffic off a pod that is still starting up, and what makes
+          #   `maxUnavailable: 0` mean anything.
+          #
+          # The rule of thumb: readiness may check dependencies, liveness must
+          # not. A liveness probe that fails when the database is down restarts
+          # every healthy pod in the fleet and fixes nothing. See the long note
+          # in src/app/api/health/route.ts.
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            # Later and slower than readiness: this one can kill the pod, so it
+            # should only fire when the process is genuinely stuck.
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # A startupProbe would be the more precise tool if this app were slow
+          # to boot: it suspends the other two until the app first responds, so
+          # you can be patient at startup without being patient forever. This
+          # app is up in a couple of seconds, so initialDelaySeconds is enough.
+
+          # Give in-flight work a chance to finish before SIGTERM lands. On
+          # pod deletion Kubernetes removes the pod from Service endpoints and
+          # signals the container at the same moment — the two are concurrent,
+          # not sequential, so without this pause a request routed a
+          # millisecond earlier arrives at a process that is already shutting
+          # down. Sleeping first lets endpoint removal propagate.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
+
+      # Default is 30s. Long-lived WebSockets do not close instantly, and this
+      # is the window between SIGTERM and SIGKILL.
+      terminationGracePeriodSeconds: 45

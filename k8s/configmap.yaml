@@ -1,0 +1,31 @@
+# Non-sensitive configuration.
+#
+# Everything here is safe to read, safe to commit, and safe to print in a log.
+# That is the whole test for ConfigMap vs Secret: not "is it configuration?"
+# (both are) but "does it matter if someone reads it?".
+#
+# The reason to externalise these at all, rather than baking them into the
+# image: one image, many environments. The same digest runs in staging and
+# production, and the only thing that differs is the objects mounted next to it.
+# An image with an environment compiled into it has to be rebuilt to be
+# promoted, and then the thing you tested is not the thing you shipped.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trpctodo-config
+  namespace: trpctodo
+data:
+  # Switches Next.js and Prisma into production behaviour: no dev-mode
+  # recompilation, no verbose query logging (see src/server/db.ts), minified
+  # client bundles.
+  NODE_ENV: "production"
+
+  # server.ts reads this. Keep it in step with containerPort in
+  # app-deployment.yaml and targetPort in app-service.yaml — three places that
+  # must agree, and the usual cause of a Service that resolves but never
+  # answers.
+  PORT: "3000"
+
+  # Opts out of Next.js build/runtime telemetry. Not a secret; just not
+  # something a server in someone else's cluster should be doing unasked.
+  NEXT_TELEMETRY_DISABLED: "1"

@@ -1,0 +1,76 @@
+# A Service is a stable address in front of a moving set of pods.
+#
+# Pod IPs are ephemeral — every restart, rollout and scale event changes them.
+# The Service gets one virtual IP and one DNS name that never change, and
+# kube-proxy keeps the mapping from that VIP to the current healthy pod IPs up
+# to date. "Healthy" here means passing the readinessProbe: that is the
+# mechanical link between the probe in app-deployment.yaml and where traffic
+# actually goes.
+#
+# WHY ClusterIP RATHER THAN LoadBalancer OR NodePort
+#
+#   ClusterIP (this one) — reachable only from inside the cluster. Correct here
+#   because external traffic arrives through the Ingress, and the Ingress talks
+#   to this Service. Nothing else should be able to reach the pods directly.
+#
+#   NodePort — opens the same port on every node. Mostly a building block for
+#   the other types, and a way to accidentally expose a service on raw node IPs.
+#
+#   LoadBalancer — provisions a cloud load balancer per Service. On GKE that is
+#   a real, billed forwarding rule with its own public IP. Fine for one service;
+#   with several it means several load balancers and several IPs, which is the
+#   problem Ingress exists to solve.
+apiVersion: v1
+kind: Service
+metadata:
+  name: trpctodo-app
+  namespace: trpctodo
+  labels:
+    app.kubernetes.io/name: trpctodo-app
+  annotations:
+    # GKE-specific: attaches the BackendConfig defined in ingress.yaml, which
+    # raises the load balancer's backend timeout so idle WebSockets are not cut
+    # off after 30 seconds. The key is a JSON map, not a plain string.
+    cloud.google.com/backend-config: '{"default": "trpctodo-backendconfig"}'
+spec:
+  type: ClusterIP
+
+  # ⚠️  A MITIGATION, NOT A FIX.
+  #
+  # Pins each client IP to one pod for 3 hours, so a browser's WebSocket and its
+  # HTTP mutations usually land on the same process — which is what the
+  # in-memory PubSub and the in-memory agent conversation store need to work at
+  # all above one replica. See the warning block in app-deployment.yaml.
+  #
+  # Why it is not a fix: it breaks the moment a pod is replaced (rollout, scale-
+  # down, eviction), it distributes load unevenly, and it collapses entirely
+  # behind a NAT or corporate proxy where thousands of users share one source
+  # IP. It also does nothing for uploaded files. The real fixes are a shared
+  # broker and object storage.
+  #
+  # Delete this block once that state moves out of process memory.
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800
+
+  # Matches the pod labels in app-deployment.yaml. This is a live query, not a
+  # one-time binding — any pod that acquires these labels joins the Service.
+  selector:
+    app.kubernetes.io/name: trpctodo-app
+
+  ports:
+    - name: http
+      protocol: TCP
+      # The port the Service listens on: http://trpctodo-app:80 inside the
+      # cluster.
+      port: 80
+      # The port on the pod. Named rather than numeric so it follows the
+      # `containerPort: 3000` named `http` in the Deployment — change the port
+      # in one place and this keeps working.
+      targetPort: http
+
+  # WebSockets need no special configuration at this layer. A Service operates
+  # at L4: it forwards a TCP connection and never inspects it, so the HTTP
+  # upgrade handshake passes through untouched. Upgrade handling only becomes a
+  # concern at the L7 hop — the Ingress.

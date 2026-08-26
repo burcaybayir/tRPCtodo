@@ -1,0 +1,6 @@
+Keeps public/ in git.
+
+Next.js serves this directory statically, and the Dockerfile copies it into the
+runtime image. Its only real content is uploads/, which is gitignored — so
+without this file the directory would not exist in a fresh clone and the
+`COPY /app/public` step would fail on any machine but the one it was written on.

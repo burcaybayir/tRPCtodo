@@ -9,7 +9,8 @@ One Next.js app, one database, **four independent API surfaces** side by side:
 | **Team & Activity** | GraphQL + WebSocket | `/api/graphql` and `/api/graphql/ws` | Apollo Client | Apollo `InMemoryCache` |
 | **AI Assistant** | Claude tool use | `/api/agent/chat` | plain `fetch` | server-side, in memory |
 
-All three write to the same SQLite file through the same Prisma client.
+All four surfaces read and write the same PostgreSQL database through the same
+Prisma client.
 Everything above the database is separate — the Todos tab never touches Apollo,
 and neither GraphQL tab touches tRPC. The point is to solve comparable problems
 in different protocols and see the differences next to each other.
@@ -31,15 +32,23 @@ npm install
 The `postinstall` script runs `prisma generate` automatically (it produces the
 Prisma types).
 
+Start PostgreSQL. The app needs a real database server — it used to run on
+SQLite, and does not any more (see the note on the `datasource` block in
+`prisma/schema.prisma` for why, and `k8s/README.md` for the deployment this was
+in aid of):
+
+```bash
+docker compose up -d db
+```
+
 ```bash
 npx prisma migrate deploy
 ```
 
-Applies the four migrations under `prisma/migrations/` in order: `0_init` (the
-Todo table), `..._add_user_and_task` (the User and Task tables),
-`..._add_team_and_comment` (Team, Comment, and the team foreign keys on User and
-Task) and `..._add_voice_message` (the VoiceMessage table). No separate database
-server to install — SQLite is a single file.
+Applies `prisma/migrations/0_init`, which creates all six tables. The migration
+history was regenerated when the datasource moved from SQLite to PostgreSQL —
+migration SQL is dialect-specific, so the old SQLite migrations could not be
+replayed against Postgres.
 
 > If you change the schema yourself, create a new migration with
 > `npx prisma migrate dev --name <name>`. `prisma db push` also works, but it
@@ -67,6 +76,7 @@ npm run dev
 - GraphQL explorer (Apollo Sandbox): http://localhost:3000/api/graphql
 - GraphQL WebSocket: ws://localhost:3000/api/graphql/ws
 - Database browser: `npm run db:studio`
+- Kubernetes deployment: see [k8s/README.md](k8s/README.md)
 
 ### About the custom server
 
@@ -107,7 +117,7 @@ Browser
   resolver                       src/server/trpc/routers/todo.ts
         │
         ▼
-  Prisma → SQLite
+  Prisma → PostgreSQL
         │
         ▼  serialized with superjson
   Browser: data (Dates arrive as real Date objects)
@@ -133,7 +143,7 @@ Browser
       └─ User.task     → INVOKED once per user (field resolver)
         │
         ▼
-  Prisma → SQLite
+  Prisma → PostgreSQL
         │
         ▼  plain JSON (no Date type — which is why Task has no date field)
   Browser: exactly the fields that were asked for

@@ -1,0 +1,22 @@
+# A namespace is a scope for names, not a security boundary on its own.
+#
+# What it actually buys you:
+#   - names only have to be unique within it, so a Service called `postgres`
+#     here does not collide with someone else's `postgres`
+#   - `kubectl delete namespace trpctodo` tears down every object in it, which
+#     makes a learning cluster easy to reset
+#   - it is the unit that ResourceQuota, LimitRange and most NetworkPolicies
+#     attach to, so it is where you would later put per-team limits
+#
+# What it does NOT buy you: isolation. By default every pod in the cluster can
+# reach every other pod, across namespaces. Restricting that needs a
+# NetworkPolicy — deliberately out of scope here.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: trpctodo
+  labels:
+    # Recommended labels from the Kubernetes docs. They are what `kubectl get
+    # all -l app.kubernetes.io/part-of=trpctodo` and most dashboards key on.
+    app.kubernetes.io/name: trpctodo
+    app.kubernetes.io/part-of: trpctodo
